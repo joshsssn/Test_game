@@ -1,4 +1,4 @@
-name: Déploiement GitHub Pages
+name: Tests et publication
 
 on:
   push:
@@ -6,16 +6,15 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
-  pages: write
-  id-token: write
+  contents: write
 
 concurrency:
   group: pages
   cancel-in-progress: false
 
 jobs:
-  test:
+  tests:
+    name: Tests du moteur
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -24,20 +23,13 @@ jobs:
           node-version: '22'
       - run: node --test tests/moteur.test.mjs
 
-  deploy:
-    needs: test
+  publication:
+    name: Publication sur GitHub Pages
+    needs: tests
     runs-on: ubuntu-latest
-    environment:
-      name: github-pages
-      url: ${{ steps.deployment.outputs.page_url }}
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/configure-pages@v5
-        with:
-          # Active GitHub Pages automatiquement s'il ne l'est pas déjà.
-          enablement: true
-      - uses: actions/upload-pages-artifact@v3
-        with:
-          path: .
-      - id: deployment
-        uses: actions/deploy-pages@v4
+      # GitHub Pages sert la branche gh-pages, qui n'est qu'un miroir de celle-ci :
+      # le site est statique et vit à la racine du dépôt.
+      - name: Mettre gh-pages à jour
+        run: git push origin HEAD:gh-pages --force

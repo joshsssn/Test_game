@@ -5,12 +5,9 @@ navigateur — aucun serveur, aucune dépendance, aucune installation.
 
 **▶️ Jouer : https://joshsssn.github.io/Test_game/**
 
-> Le déploiement est automatique (workflow `.github/workflows/pages.yml`), mais
-> GitHub Pages doit être activé une première fois à la main :
-> *Settings → Pages → Build and deployment → Source : **GitHub Actions***.
-> Tant que ce n'est pas fait, le job `deploy` échoue sur
-> « Create Pages site failed » — l'action n'a pas le droit de créer le site
-> elle-même.
+> Publication automatique : à chaque push, le workflow
+> `.github/workflows/pages.yml` joue les tests du moteur puis met à jour la
+> branche `gh-pages`, que GitHub Pages sert à la racine.
 
 Chaque joueur cache un inventaire de formes sur sa grille, sonde la grille
 adverse à coups de laser, et doit **annoncer (« call ») toutes les formes de
