@@ -1,11 +1,10 @@
 /* =========================================================================
-   Lasers & Formes — moteur de jeu (pur, sans DOM, testable sous Node)
+   Bataille Prismatique — moteur de jeu (pur, sans DOM, testable sous Node)
 
-   Le triangle, le carré et le losange occupent un bloc de 2 × 2 cases. C'est ce
-   qui rend le jeu déchiffrable : chaque FACE d'une forme tombe sur une case
-   bien identifiée, donc le joueur sait toujours quelle face son laser a
-   touchée, et peut en déduire où il repart. L'étoile ne dévie rien : elle n'a
-   aucune face à distinguer et tient sur une seule case.
+   Le principe qui gouverne toute la géométrie : chaque FACE d'une forme doit
+   tomber sur une case identifiable, sinon le joueur ne peut pas déduire où son
+   laser repart. D'où des pièces étalées sur plusieurs cases, à l'exception de
+   l'étoile qui ne dévie rien et n'a donc aucune face à distinguer.
    ========================================================================= */
 
 /* ───────────────────────── Géométrie de base ───────────────────────── */
@@ -28,42 +27,19 @@ export const COTE_SORTIE = { E: 'droite', W: 'gauche', S: 'bas', N: 'haut' };
 /** Les quatre coins d'un bloc 2 × 2, qui servent aussi de noms de quart. */
 export const COINS = ['NW', 'NE', 'SE', 'SW'];
 
-/** Coin diamétralement opposé. */
+/** Coin diamétralement opposé, dans un bloc 2 × 2. */
 export const COIN_OPPOSE = { NW: 'SE', SE: 'NW', NE: 'SW', SW: 'NE' };
 
-/** Décalage [ligne, colonne] de chaque quart par rapport à l'ancre (coin haut-gauche). */
+/** Décalage [ligne, colonne] de chaque quart par rapport au coin haut-gauche. */
 export const DECALAGE = { NW: [0, 0], NE: [0, 1], SW: [1, 0], SE: [1, 1] };
 
 /** Bords de case adjacents à un coin. */
 export const BORDS_DU_COIN = { NW: ['N', 'W'], NE: ['N', 'E'], SE: ['S', 'E'], SW: ['S', 'W'] };
 
-/**
- * Quart d'un bloc sur lequel il faut cliquer pour annoncer la pièce : toujours
- * celui d'en bas à gauche. Une pièce d'une seule case (l'étoile) s'annonce
- * évidemment sur sa case.
- */
-export const QUART_DE_CALL = 'SW';
-
-/* ───────────────────────── Le triangle ─────────────────────────
-   Un triangle rectangle inscrit dans le bloc. Son orientation est donnée par le
-   coin où se trouve l'ANGLE DROIT. Ses trois faces agissent, mais pas de la
-   même manière :
-
-     • l'HYPOTÉNUSE renvoie le laser à 90° (c'est un miroir) ;
-     • les deux CATHÈTES le renvoient à 180°, exactement comme un carré.
-
-   Étalé sur 2 × 2, le bloc se décompose ainsi (ici angle droit en NW) :
-
-        ┌─────┬─────┐    NW  le coin plein : deux cathètes, demi-tour partout
-        │█████│██╲  │    NE  une cathète au nord, l'hypoténuse en diagonale
-        ├─────┼─────┤    SW  une cathète à l'ouest, l'hypoténuse en diagonale
-        │██╲  │     │    SE  hors du triangle : le laser passe sans être teinté
-        └─────┴─────┘                                                          */
-
 /** Diagonale portée par l'hypoténuse, selon la position de l'angle droit. */
 export const HYPOTENUSE = { NW: '/', NE: '\\', SE: '/', SW: '\\' };
 
-/** Description en clair d'une orientation. */
+/** Description en clair d'une orientation de triangle. */
 export const NOM_COIN = {
   NW: 'angle droit en haut à gauche',
   NE: 'angle droit en haut à droite',
@@ -72,26 +48,23 @@ export const NOM_COIN = {
 };
 
 /**
- * Déviation dans un quart de triangle portant l'hypoténuse.
- * @param {'NW'|'NE'|'SE'|'SW'} coin  position de l'angle droit du bloc
+ * Déviation dans une case portant un triangle rectangle.
+ *
+ *   • le laser qui entre par un bord longé par une CATHÈTE fait demi-tour,
+ *     exactement comme sur un carré ;
+ *   • celui qui entre par l'un des deux autres bords frappe l'HYPOTÉNUSE et
+ *     rebondit à 90°.
+ *
+ * @param {'NW'|'NE'|'SE'|'SW'} coin  position de l'angle droit
  * @param {'N'|'S'|'E'|'W'} dir  direction de déplacement du laser
  */
 export function devierTriangle(coin, dir) {
-  const bordEntree = OPPOSE[dir];                                   // bord par lequel le laser entre
+  const bordEntree = OPPOSE[dir];                                   // bord par lequel il entre
   if (BORDS_DU_COIN[coin].includes(bordEntree)) return OPPOSE[dir]; // cathète -> demi-tour
   return MIROIRS[HYPOTENUSE[coin]][dir];                            // hypoténuse -> 90°
 }
 
-/* ───────────────────────── Le losange ─────────────────────────
-   Inscrit dans le bloc, ses sommets tombent au milieu des bords : chacune de
-   ses quatre faces occupe exactement un quart, sur la diagonale de celui-ci.
-   Le laser rebondit toujours à 90° et n'entre jamais dans le corps.
-
-        ┌─────┬─────┐
-        │  ╱  │  ╲  │
-        ├─────┼─────┤
-        │  ╲  │  ╱  │
-        └─────┴─────┘                                                          */
+/** Diagonale portée par chaque quart du losange. */
 export const DIAGONALE_LOSANGE = { NW: '/', NE: '\\', SW: '\\', SE: '/' };
 
 /* ───────────────────────── L'étoile et ses trois modes ─────────────────────────
@@ -99,60 +72,201 @@ export const DIAGONALE_LOSANGE = { NW: '/', NE: '\\', SW: '\\', SE: '/' };
    est une RÈGLE DE LA PARTIE, choisie à la configuration et commune aux deux
    joueurs — ce n'est donc pas quelque chose à deviner. Trois modes :
 
-     • simple    — sa teinte magenta s'ajoute au mélange, comme n'importe quelle
-                   autre forme ;
-     • dominante — elle efface tout ce que le laser avait accumulé et impose le
-                   magenta ; les formes rencontrées ENSUITE se mélangent
-                   normalement (bleu → magenta → rouge donne magenta + rouge,
-                   le bleu est perdu) ;
+     • simple    — sa teinte s'ajoute au mélange, comme n'importe quelle forme ;
+     • dominante — elle efface tout ce que le laser avait accumulé et impose sa
+                   teinte ; les formes rencontrées ENSUITE se mélangent
+                   normalement ;
      • blanche   — elle blanchit le laser et le verrouille : plus rien ne peut
                    le colorer, quoi qu'il rencontre après.
 
-   Conséquence importante : la couleur n'est plus symétrique. Le trajet, lui,
-   reste réversible — tirer depuis la sortie d'un tir ramène toujours à son
-   entrée — mais la couleur obtenue peut différer selon le sens. C'est une
-   source d'information à part entière.                                        */
+   Conséquence importante : en mode dominante ou blanche, la couleur n'est plus
+   symétrique. Le trajet, lui, reste réversible — tirer depuis la sortie d'un
+   tir ramène toujours à son entrée — mais la couleur obtenue peut différer
+   selon le sens. C'est une source d'information à part entière.               */
 export const MODES_ETOILE = ['simple', 'dominante', 'blanche'];
 
-/** Ce que chaque mode fait au laser, en clair. */
 export const NOM_MODE_ETOILE = {
   simple:    'sa teinte magenta s\'ajoute au mélange',
   dominante: 'efface les teintes précédentes et impose le magenta',
   blanche:   'blanchit le laser et le verrouille définitivement'
 };
 
-/** Couleur sous laquelle chaque mode est dessiné. */
 export const COULEUR_MODE_ETOILE = { simple: 'magenta', dominante: 'magenta', blanche: 'blanc' };
 
-/* ───────────────────────── Les formes ───────────────────────── */
+/* ───────────────────────── La navette ─────────────────────────
+   Quatre cases en ligne : deux cases pleines au milieu, et une pointe
+   triangulaire à chaque bout. Les deux pointes sont coupées sur la MÊME
+   diagonale, ce qui donne une pièce en biais, symétrique par demi-tour.
+
+        ╱▏      ▕╲                                   Quatre variantes, une seule
+        ██      ██        ╲████        ████╱         famille : la pièce couchée
+        ██      ██        ████╱        ╲████         d'un quart de tour, et son
+        ▏╱      ╲▕                                   image dans un miroir.
+        v/      v\          h\           h/
+
+   Elle se POSE par sa case pleine du bas (debout) ou de gauche (couchée), et
+   s'ANNONCE comme toutes les autres : sur sa case la plus basse, et la plus à
+   gauche à égalité.                                                           */
+export const SENS_NAVETTE = ['v/', 'v\\', 'h/', 'h\\'];
+
+export const NOM_SENS_NAVETTE = {
+  'v/':  'debout, pointes coupées en ╱',
+  'v\\': 'debout, pointes coupées en ╲',
+  'h/':  'couchée, pointes coupées en ╱',
+  'h\\': 'couchée, pointes coupées en ╲'
+};
 
 /**
- * Les quatre formes du jeu. `variantes` liste les déclinaisons qu'il faut
- * annoncer correctement pour réussir un call : les quatre orientations du
- * triangle, les trois modes de l'étoile.
+ * Pour chaque variante : orientation, et angle droit de chacune des deux
+ * pointes, dans l'ordre du haut vers le bas (debout) ou de gauche à droite
+ * (couchée). Les deux coins d'une même variante portent toujours la même
+ * diagonale — c'est ce qui donne à la pièce son allure penchée.
  */
+const FORMES_NAVETTE = {
+  'v/':  { vertical: true,  pointes: ['SE', 'NW'] },
+  'v\\': { vertical: true,  pointes: ['SW', 'NE'] },
+  'h/':  { vertical: false, pointes: ['SE', 'NW'] },
+  'h\\': { vertical: false, pointes: ['NE', 'SW'] }
+};
+
+/* ───────────────────────── Les formes ─────────────────────────
+   Chaque forme est décrite par un GABARIT : la liste des cases qu'elle occupe,
+   avec le rôle de chacune vis-à-vis du laser.
+
+     mur      — demi-tour à 180°, quel que soit le bord d'entrée
+     miroir   — rebond à 90° sur la diagonale indiquée
+     triangle — l'hypoténuse renvoie à 90°, les deux cathètes à 180°
+     filtre   — le laser passe tout droit, il est seulement teinté
+
+   Une case du gabarit porte `ref: true` : c'est la CASE DE RÉFÉRENCE, celle
+   qu'on clique pour poser la pièce et celle qu'il faut viser pour l'annoncer.
+   Elle est toujours choisie sur une partie « pleine » de la forme.            */
+
+/** Les deux cases voisines d'un coin, à l'intérieur d'un bloc 2 × 2. */
+const VOISINS_DU_COIN = { NW: ['NE', 'SW'], NE: ['NW', 'SE'], SE: ['NE', 'SW'], SW: ['NW', 'SE'] };
+
+const avecDecalage = (x) => ({ ...x, dr: DECALAGE[x.part][0], dc: DECALAGE[x.part][1] });
+
+/**
+ * Triangle : trois cases seulement. La case de l'angle droit est pleine, les
+ * deux voisines portent l'hypoténuse — et le quart opposé au coin est HORS du
+ * triangle. Il reste donc libre, et une étoile peut très bien venir s'y loger.
+ */
+function gabaritTriangle(coin) {
+  return [
+    avecDecalage({ part: coin, role: 'mur', ref: true }),
+    ...VOISINS_DU_COIN[coin].map((part) => avecDecalage({ part, role: 'triangle', coin }))
+  ];
+}
+
+/** Carré et losange : un bloc 2 × 2 plein, référence au coin en bas à gauche. */
+function gabaritBloc(role) {
+  return COINS.map((part) => avecDecalage({
+    part, role,
+    diag: role === 'miroir' ? DIAGONALE_LOSANGE[part] : undefined,
+    ref: part === 'SW'
+  }));
+}
+
+/** Navette : deux pointes, deux cases pleines, posée par la pleine basse/gauche. */
+function gabaritNavette(sens) {
+  const { vertical, pointes } = FORMES_NAVETTE[sens];
+  const pos = (i) => (vertical ? { dr: i, dc: 0 } : { dr: 0, dc: i });
+  return [
+    { part: 'P0', role: 'triangle', coin: pointes[0], ...pos(0) },
+    { part: 'P1', role: 'mur', ...pos(1), ref: !vertical },   // couchée : la pleine de gauche
+    { part: 'P2', role: 'mur', ...pos(2), ref: vertical },    // debout : la pleine du bas
+    { part: 'P3', role: 'triangle', coin: pointes[1], ...pos(3) }
+  ];
+}
+
 export const FORMES = {
   triangle: {
-    nom: 'Triangle', couleur: 'bleu', bloc: true,
+    nom: 'Triangle', couleur: 'bleu',
     variantes: COINS,
     nomsVariantes: { NW: 'Triangle ◤', NE: 'Triangle ◥', SE: 'Triangle ◢', SW: 'Triangle ◣' },
-    detailsVariantes: NOM_COIN
+    detailsVariantes: NOM_COIN,
+    gabarit: gabaritTriangle
   },
-  carre:   { nom: 'Carré',   couleur: 'rouge',   bloc: true,  variantes: null, glyphe: '■' },
-  losange: { nom: 'Losange', couleur: 'jaune',   bloc: true,  variantes: null, glyphe: '◆' },
-  etoile:  { nom: 'Étoile',  couleur: 'magenta', bloc: false, variantes: null, glyphe: '★' }
+  carre: {
+    nom: 'Carré', couleur: 'rouge', glyphe: '■',
+    variantes: null,
+    gabarit: () => gabaritBloc('mur')
+  },
+  losange: {
+    nom: 'Losange', couleur: 'jaune', glyphe: '◆',
+    variantes: null,
+    gabarit: () => gabaritBloc('miroir')
+  },
+  navette: {
+    nom: 'Navette', couleur: 'cyan',
+    variantes: SENS_NAVETTE,
+    nomsVariantes: {
+      'v/': 'Navette ▮╱', 'v\\': 'Navette ▮╲', 'h/': 'Navette ▬╱', 'h\\': 'Navette ▬╲'
+    },
+    detailsVariantes: NOM_SENS_NAVETTE,
+    gabarit: gabaritNavette
+  },
+  etoile: {
+    nom: 'Étoile', couleur: 'magenta', glyphe: '★',
+    variantes: null,
+    gabarit: () => [{ part: null, role: 'filtre', dr: 0, dc: 0, ref: true }]
+  }
 };
+
+export const ORDRE_FORMES = ['triangle', 'carre', 'losange', 'navette', 'etoile'];
 
 /** Mode d'étoile appliqué par défaut. */
 export const MODE_ETOILE_DEFAUT = 'simple';
 
-export const ORDRE_FORMES = ['triangle', 'carre', 'losange', 'etoile'];
-
-/** Côté, en cases, d'une pièce en bloc. */
-export const COTE_BLOC = 2;
-
 /** Déclinaisons d'un type : ses variantes, ou [null] s'il n'en a pas. */
 export const variantesDe = (type) => FORMES[type].variantes ?? [null];
+
+/**
+ * La case d'ANNONCE d'une pièce : la plus basse, et la plus à gauche à égalité.
+ * On la déduit du gabarit plutôt que de la déclarer, pour qu'elle reste juste
+ * quelle que soit la forme — y compris quand celle-ci a un creux, comme le
+ * triangle dont le coin opposé à l'angle droit ne lui appartient pas.
+ */
+function marquerCaseDeCall(cases) {
+  let visee = cases[0];
+  for (const x of cases) {
+    if (x.dr > visee.dr || (x.dr === visee.dr && x.dc < visee.dc)) visee = x;
+  }
+  return cases.map((x) => (x === visee ? { ...x, call: true } : x));
+}
+
+/** Gabarit d'une déclinaison : cases occupées, rôles, case de pose et d'annonce.
+    Sans variante précisée, on prend la première — toutes ont la même emprise. */
+export const gabarit = (type, variante = null) =>
+  marquerCaseDeCall(FORMES[type].gabarit(variante ?? variantesDe(type)[0]));
+
+/** Nombre de cases occupées par une forme. */
+export const emprise = (type, variante = null) => gabarit(type, variante).length;
+
+/** Encombrement { h, l } du rectangle englobant. */
+export function encombrement(type, variante = null) {
+  const g = gabarit(type, variante);
+  return { h: Math.max(...g.map((x) => x.dr)) + 1, l: Math.max(...g.map((x) => x.dc)) + 1 };
+}
+
+/** Décalage [dr, dc] de la case par laquelle on POSE la pièce. */
+export function decalageReference(type, variante = null) {
+  const ref = gabarit(type, variante).find((x) => x.ref);
+  return [ref.dr, ref.dc];
+}
+
+/** Décalage [dr, dc] de la case par laquelle on ANNONCE la pièce. */
+export function decalageCall(type, variante = null) {
+  const visee = gabarit(type, variante).find((x) => x.call);
+  return [visee.dr, visee.dc];
+}
+
+/** Case à viser pour annoncer la pièce ancrée en (r, c). */
+export function caseDeCall(type, variante, r, c) {
+  const [dr, dc] = decalageCall(type, variante);
+  return { r: r + dr, c: c + dc };
+}
 
 /**
  * Couleur d'affichage d'une forme. L'étoile prend celle de son mode, qui est
@@ -162,48 +276,82 @@ export function couleurDe(type, modeEtoile = MODE_ETOILE_DEFAUT) {
   return type === 'etoile' ? COULEUR_MODE_ETOILE[modeEtoile] : FORMES[type].couleur;
 }
 
-/* ───────────────────────── Couleurs ───────────────────────── */
+/* ───────────────────────── Couleurs ─────────────────────────
+   Cinq teintes de base, donc 32 mélanges possibles. Le nom compte plus que la
+   nuance : c'est lui qui est écrit dans le journal, et la table complète est
+   consultable en jeu. Certaines nuances sombres se ressemblent forcément — à
+   32 couleurs, l'œil ne suffit plus, le nom tranche.                          */
 
-/** Les quatre teintes de base, dans l'ordre de tri utilisé par les clés de mélange. */
-export const BASES = ['bleu', 'jaune', 'magenta', 'rouge'];
+/** Les cinq teintes de base, dans l'ordre de tri des clés de mélange. */
+export const BASES = ['bleu', 'cyan', 'jaune', 'magenta', 'rouge'];
 
-/** Table des 16 mélanges possibles (clé = teintes triées, séparées par des virgules). */
 export const MELANGES = {
-  '':                         'blanc',
-  'bleu':                     'bleu',
-  'jaune':                    'jaune',
-  'magenta':                  'magenta',
-  'rouge':                    'rouge',
-  'bleu,jaune':               'vert',
-  'bleu,magenta':             'turquoise',
-  'bleu,rouge':               'violet',
-  'jaune,magenta':            'corail',
-  'jaune,rouge':              'orange',
-  'magenta,rouge':            'bordeaux',
-  'bleu,jaune,magenta':       'olive',
-  'bleu,jaune,rouge':         'marron',
-  'bleu,magenta,rouge':       'prune',
-  'jaune,magenta,rouge':      'ocre',
-  'bleu,jaune,magenta,rouge': 'noir'
+  '':                              'blanc',
+  'bleu':                          'bleu',
+  'cyan':                          'cyan',
+  'jaune':                         'jaune',
+  'magenta':                       'magenta',
+  'rouge':                         'rouge',
+  'bleu,cyan':                     'azur',
+  'bleu,jaune':                    'vert',
+  'bleu,magenta':                  'indigo',
+  'bleu,rouge':                    'violet',
+  'cyan,jaune':                    'anis',
+  'cyan,magenta':                  'lilas',
+  'cyan,rouge':                    'ardoise',
+  'jaune,magenta':                 'corail',
+  'jaune,rouge':                   'orange',
+  'magenta,rouge':                 'bordeaux',
+  'bleu,cyan,jaune':               'sapin',
+  'bleu,cyan,magenta':             'pervenche',
+  'bleu,cyan,rouge':               'acier',
+  'bleu,jaune,magenta':            'olive',
+  'bleu,jaune,rouge':              'marron',
+  'bleu,magenta,rouge':            'prune',
+  'cyan,jaune,magenta':            'perle',
+  'cyan,jaune,rouge':              'rouille',
+  'cyan,magenta,rouge':            'mauve',
+  'jaune,magenta,rouge':           'ocre',
+  'bleu,cyan,jaune,magenta':       'jade',
+  'bleu,cyan,jaune,rouge':         'kaki',
+  'bleu,cyan,magenta,rouge':       'schiste',
+  'bleu,jaune,magenta,rouge':      'charbon',
+  'cyan,jaune,magenta,rouge':      'taupe',
+  'bleu,cyan,jaune,magenta,rouge': 'noir'
 };
 
-/** Rendu CSS de chaque couleur résultante. */
 export const CSS_COULEURS = {
-  blanc:     '#e9eef8',
+  blanc:     '#eef2f9',
   bleu:      '#3b82f6',
+  cyan:      '#22d3ee',
   jaune:     '#facc15',
   magenta:   '#ec4899',
   rouge:     '#ef4444',
+  azur:      '#0284c7',
   vert:      '#22c55e',
-  turquoise: '#06b6d4',
-  violet:    '#8b5cf6',
+  indigo:    '#4f46e5',
+  violet:    '#a855f7',
+  anis:      '#a3e635',
+  lilas:     '#e9d5ff',
+  ardoise:   '#64748b',
   corail:    '#fda4af',
   orange:    '#f97316',
-  bordeaux:  '#881337',
-  olive:     '#3f6212',
+  bordeaux:  '#9f1239',
+  sapin:     '#15803d',
+  pervenche: '#818cf8',
+  acier:     '#1e3a5f',
+  olive:     '#4d7c0f',
   marron:    '#7c2d12',
-  prune:     '#4c1d95',
+  prune:     '#6b21a8',
+  perle:     '#cbd5e1',
+  rouille:   '#b45309',
+  mauve:     '#d946ef',
   ocre:      '#a16207',
+  jade:      '#2dd4bf',
+  kaki:      '#3f6212',
+  schiste:   '#3f3f46',
+  charbon:   '#78350f',
+  taupe:     '#a8a29e',
   noir:      '#0b1120'
 };
 
@@ -225,25 +373,13 @@ export function melanger(ensemble) {
 
 /* ───────────────────────── Effet d'une case ───────────────────────── */
 
-/**
- * Vrai si la case est dans l'emprise d'une pièce mais hors de la forme
- * elle-même : le quart opposé à l'angle droit d'un triangle. Le laser la
- * traverse sans être dévié ni teinté.
- */
-export const caseInerte = (cellule) =>
-  cellule.type === 'triangle' && cellule.part === COIN_OPPOSE[cellule.variante];
-
 /** Nouvelle direction du laser après avoir rencontré une case occupée. */
 export function nouvelleDirection(cellule, dir) {
-  if (caseInerte(cellule)) return dir;
-  switch (cellule.type) {
-    case 'carre':   return OPPOSE[dir];                                    // mur sur les 4 faces
-    case 'etoile':  return dir;                                            // traverse tout droit
-    case 'losange': return MIROIRS[DIAGONALE_LOSANGE[cellule.part]][dir];  // rebond 90°
-    case 'triangle':
-      if (cellule.part === cellule.variante) return OPPOSE[dir];           // coin plein : deux cathètes
-      return devierTriangle(cellule.variante, dir);
-    default: return dir;
+  switch (cellule.role) {
+    case 'mur':      return OPPOSE[dir];
+    case 'miroir':   return MIROIRS[cellule.diag][dir];
+    case 'triangle': return devierTriangle(cellule.coin, dir);
+    default:         return dir;                    // 'filtre' : elle traverse
   }
 }
 
@@ -254,7 +390,7 @@ export function nouvelleDirection(cellule, dir) {
  * @param {'simple'|'dominante'|'blanche'} modeEtoile  règle de la partie
  */
 export function appliquerTeinte(etat, cellule, modeEtoile = MODE_ETOILE_DEFAUT) {
-  if (caseInerte(cellule) || etat.verrouille) return;
+  if (etat.verrouille) return;
   if (cellule.type !== 'etoile') { etat.teintes.add(FORMES[cellule.type].couleur); return; }
   switch (modeEtoile) {
     case 'dominante': etat.teintes.clear(); etat.teintes.add('magenta'); break;
@@ -285,20 +421,16 @@ export function depart(d, cote, index) {
 
 /**
  * Propage un laser dans la grille.
- * @param {Map<string,object>} grille  case -> quart de pièce
+ * @param {Map<string,object>} grille  case -> morceau de pièce
  * @param {{lignes:number, colonnes:number}} d  dimensions de la grille
  * @param {'gauche'|'droite'|'haut'|'bas'} cote  bord d'entrée
  * @param {number} index   numéro du bord d'entrée, à partir de 1
  * @param {'simple'|'dominante'|'blanche'} modeEtoile  mode d'étoile de la partie
- * @returns {{statut:'sorti'|'piege', coteSortie?:string, indexSortie?:number,
- *            retour?:boolean, couleur:string|null, etapes:Array}}
  *
  * Chaque case applique une permutation des directions et le déplacement en
  * découle, donc (case, direction) -> (case, direction) est une bijection :
  * aucun cycle n'est atteignable depuis un bord, et le TRAJET est réversible.
- * La COULEUR, elle, ne l'est plus quand la partie se joue en mode d'étoile
- * dominante ou blanche : l'ordre des rencontres compte. Le statut 'piege' est
- * un garde-fou qui ne devrait jamais se déclencher.
+ * Le statut 'piege' est un garde-fou qui ne devrait jamais se déclencher.
  */
 export function tirer(grille, d, cote, index, modeEtoile = MODE_ETOILE_DEFAUT) {
   const dep = depart(d, cote, index);
@@ -351,49 +483,43 @@ export function nomForme(f) {
   return def.variantes ? (def.nomsVariantes[f.variante] ?? def.nom) : def.nom;
 }
 
-/** Précision en clair sur la variante (orientation du triangle, mode de l'étoile). */
+/** Précision en clair sur la variante. */
 export function detailVariante(type, variante) {
   const def = FORMES[type];
   return def.variantes && variante ? def.detailsVariantes[variante] : '';
 }
 
-/**
- * Vrai si cette case est celle sur laquelle il faut cliquer pour annoncer la
- * pièce : le quart en bas à gauche d'un bloc, ou la case unique de l'étoile.
- */
-export const estCaseDeCall = (cellule) => !cellule.part || cellule.part === QUART_DE_CALL;
-
-/** Côté occupé par une forme : 2 pour les blocs, 1 pour l'étoile. */
-export const coteDe = (type) => (FORMES[type].bloc ? COTE_BLOC : 1);
-
-/** Nombre de cases occupées par une forme. */
-export const emprise = (type) => coteDe(type) ** 2;
+/** Vrai si cette case est celle qu'il faut viser pour annoncer la pièce. */
+export const estCaseDeCall = (cellule) => !!cellule.call;
 
 /** Nombre total de pièces d'un inventaire. */
 export const totalPieces = (counts) => ORDRE_FORMES.reduce((s, t) => s + (counts[t] || 0), 0);
 
-/** Nombre total de cases occupées par un inventaire. */
+/** Nombre de cases occupées par un inventaire (pour le type, toutes variantes
+    ont la même emprise). */
 export const cellulesRequises = (counts) =>
-  ORDRE_FORMES.reduce((s, t) => s + (counts[t] || 0) * emprise(t), 0);
+  ORDRE_FORMES.reduce((s, t) => s + (counts[t] || 0) * emprise(t, variantesDe(t)[0]), 0);
 
-/** Cases occupées par une pièce ancrée en (r, c), avec le quart correspondant. */
-export function empriseDe(type, r, c) {
-  if (!FORMES[type].bloc) return [{ r, c, part: null }];
-  return COINS.map((part) => {
-    const [dr, dc] = DECALAGE[part];
-    return { r: r + dr, c: c + dc, part };
-  });
+/** Cases occupées par une pièce ancrée en (r, c), avec leur rôle. */
+export function empriseDe(type, variante, r, c) {
+  return gabarit(type, variante).map((g) => ({ ...g, r: r + g.dr, c: c + g.dc }));
 }
 
 /** Ancre valide la plus proche : une pièce posée au bord se recale dans la grille. */
-export function ancreValide(type, d, r, c) {
-  const n = coteDe(type);
-  return [Math.max(0, Math.min(d.lignes - n, r)), Math.max(0, Math.min(d.colonnes - n, c))];
+export function ancreValide(type, variante, d, r, c) {
+  const { h, l } = encombrement(type, variante);
+  return [Math.max(0, Math.min(d.lignes - h, r)), Math.max(0, Math.min(d.colonnes - l, c))];
+}
+
+/** Ancre correspondant à une case de référence cliquée. */
+export function ancreDepuisReference(type, variante, r, c) {
+  const [dr, dc] = decalageReference(type, variante);
+  return [r - dr, c - dc];
 }
 
 /** La pièce tient-elle ici sans déborder ni chevaucher une autre ? */
-export function placeLibre(grille, d, type, r, c) {
-  return empriseDe(type, r, c).every(
+export function placeLibre(grille, d, type, variante, r, c) {
+  return empriseDe(type, variante, r, c).every(
     (u) => u.r >= 0 && u.r < d.lignes && u.c >= 0 && u.c < d.colonnes && !grille.has(cle(u.r, u.c)));
 }
 
@@ -403,12 +529,17 @@ export function placeLibre(grille, d, type, r, c) {
  * @returns {boolean} vrai si la pièce a pu être posée
  */
 export function poserPiece(grille, d, type, r, c, variante = null) {
-  if (!placeLibre(grille, d, type, r, c)) return false;
+  const v = variante ?? variantesDe(type)[0];
+  if (!placeLibre(grille, d, type, v, r, c)) return false;
   const id = `${type}@${r},${c}`;
-  for (const u of empriseDe(type, r, c)) {
-    const cellule = { id, type, ancre: [r, c] };
+  for (const u of empriseDe(type, v, r, c)) {
+    const cellule = { id, type, ancre: [r, c], role: u.role, dr: u.dr, dc: u.dc };
     if (u.part) cellule.part = u.part;
-    if (FORMES[type].variantes) cellule.variante = variante ?? FORMES[type].variantes[0];
+    if (u.coin) cellule.coin = u.coin;
+    if (u.diag) cellule.diag = u.diag;
+    if (u.ref) cellule.ref = true;
+    if (u.call) cellule.call = true;
+    if (FORMES[type].variantes) cellule.variante = v;
     grille.set(cle(u.r, u.c), cellule);
   }
   return true;
@@ -422,21 +553,35 @@ export function retirerPiece(grille, r, c) {
   return true;
 }
 
-/** Change la variante de la pièce qui occupe une case (toutes ses cases). */
-export function changerVariante(grille, r, c, variante) {
+/**
+ * Change la variante de la pièce qui occupe une case. La forme changeant de
+ * gabarit, on la repose : l'opération échoue si la nouvelle forme ne tient pas.
+ * L'ancre est conservée, la case de référence peut donc se déplacer.
+ */
+export function changerVariante(grille, d, r, c, variante) {
   const cellule = grille.get(cle(r, c));
   if (!cellule || !FORMES[cellule.type].variantes) return null;
-  for (const v of grille.values()) if (v.id === cellule.id) v.variante = variante;
-  return variante;
+  const { type, ancre } = cellule;
+  const ancienne = cellule.variante;
+  retirerPiece(grille, r, c);
+  if (poserPiece(grille, d, type, ancre[0], ancre[1], variante)) return variante;
+  poserPiece(grille, d, type, ancre[0], ancre[1], ancienne);   // remise en l'état
+  return null;
 }
 
-/** Passe à la variante suivante de la pièce qui occupe une case. */
-export function varianteSuivante(grille, r, c) {
+/** Passe à la variante suivante qui tient à cet emplacement. */
+export function varianteSuivante(grille, d, r, c) {
   const cellule = grille.get(cle(r, c));
   if (!cellule) return null;
   const liste = FORMES[cellule.type].variantes;
   if (!liste) return null;
-  return changerVariante(grille, r, c, liste[(liste.indexOf(cellule.variante) + 1) % liste.length]);
+  const depart = liste.indexOf(cellule.variante);
+  const ancre = [...cellule.ancre];
+  for (let i = 1; i <= liste.length; i++) {
+    const essai = liste[(depart + i) % liste.length];
+    if (changerVariante(grille, d, ancre[0], ancre[1], essai)) return essai;
+  }
+  return null;
 }
 
 /** Clés des cases occupées par la pièce dont on connaît une case. */
@@ -469,7 +614,7 @@ export function placementAleatoire(d, counts) {
   const ancres = [];
   for (let r = 0; r < d.lignes; r++) for (let c = 0; c < d.colonnes; c++) ancres.push([r, c]);
 
-  // Les blocs d'abord : ils trouvent bien plus difficilement leur place que l'étoile.
+  // Les pièces encombrantes d'abord : elles trouvent bien plus difficilement leur place.
   const types = [...ORDRE_FORMES].sort((a, b) => emprise(b) - emprise(a));
   for (const type of types) {
     const liste = variantesDe(type);
@@ -479,7 +624,10 @@ export function placementAleatoire(d, counts) {
         [ancres[i], ancres[j]] = [ancres[j], ancres[i]];
       }
       const variante = liste[alea(liste.length)];
-      ancres.some(([r, c]) => poserPiece(grille, d, type, r, c, variante));
+      // On tente la variante tirée, puis les autres : près d'un bord, certaines
+      // orientations ne tiennent pas alors que d'autres oui.
+      const ordre = [variante, ...liste.filter((v) => v !== variante)];
+      ancres.some(([r, c]) => ordre.some((v) => poserPiece(grille, d, type, r, c, v)));
     }
   }
   return grille;

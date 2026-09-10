@@ -2,6 +2,7 @@
    Lasers & Formes — interface et déroulé de la partie (2 joueurs, 1 appareil)
    ========================================================================= */
 import * as M from './moteur.js';
+import * as IA from './ia.js';
 
 /* ───────────────────────── Utilitaires ───────────────────────── */
 const $  = (sel, racine = document) => racine.querySelector(sel);
@@ -31,99 +32,128 @@ function texteSur(hex) {
 }
 
 /* ─────────────────────── Rendu vectoriel des formes ───────────────────────
-   Chaque pièce est dessinée une fois dans un carré de 200 × 200, c'est-à-dire à
-   l'échelle de son bloc de 2 × 2 cases. Chaque case n'affiche ensuite que sa
-   fenêtre de 100 × 100 : les quatre quarts se recomposent en une forme continue.
+   Une pièce est dessinée dans un repère où chaque case vaut 100 × 100, à partir
+   de son gabarit : on ne redessine donc jamais une forme « à la main », le
+   dessin découle des règles. Sur le plateau, chaque case n'affiche que sa
+   propre fenêtre de 100 × 100 ; dans les palettes on montre la pièce entière.
 
    Le trait porte l'information de jeu :
      • face BRILLANTE (trait plein avec un liseré clair) -> rebond à 90° ;
      • face en POINTILLÉS                                 -> demi-tour à 180°.  */
 
-const B = 200;          // côté du bloc en unités SVG
-const M0 = 14, M1 = B - 14;   // marge intérieure du tracé
+const U = 100;                                   // côté d'une case, en unités SVG
+const MARGE = 9;                                 // retrait du tracé dans sa case
 
-/** Sommets et faces du triangle, selon la position de l'angle droit. */
-const TRIANGLE = {
-  NW: { pts: [[M0, M0], [M1, M0], [M0, M1]], murs: [[M0, M0, M1, M0], [M0, M0, M0, M1]], hypo: [M1, M0, M0, M1] },
-  NE: { pts: [[M1, M0], [M0, M0], [M1, M1]], murs: [[M1, M0, M0, M0], [M1, M0, M1, M1]], hypo: [M0, M0, M1, M1] },
-  SE: { pts: [[M1, M1], [M1, M0], [M0, M1]], murs: [[M1, M1, M1, M0], [M1, M1, M0, M1]], hypo: [M1, M0, M0, M1] },
-  SW: { pts: [[M0, M1], [M0, M0], [M1, M1]], murs: [[M0, M1, M0, M0], [M0, M1, M1, M1]], hypo: [M0, M0, M1, M1] }
-};
-
-/** Étoile à cinq branches, mise à l'échelle du bloc. */
+/** Étoile à cinq branches, dans une case de 100 × 100. */
 const ETOILE_POINTS = [
-  [100, 12], [121.2, 70.8], [183.6, 72.8], [134.2, 111.2], [151.8, 171.2],
-  [100, 136], [48.2, 171.2], [65.8, 111.2], [16.4, 72.8], [78.8, 70.8]
-].map((p) => p.join(',')).join(' ');
+  [50, 6], [60.6, 35.4], [91.8, 36.4], [67.1, 55.6], [75.9, 85.6],
+  [50, 68], [24.1, 85.6], [32.9, 55.6], [8.2, 36.4], [39.4, 35.4]
+];
 
-const trace = (pts) => pts.map((p) => p.join(',')).join(' ');
+/** Les quatre coins d'une case, en coordonnées absolues. */
+const coinsDeLaCase = (x, y) => ({
+  NW: [x, y], NE: [x + U, y], SE: [x + U, y + U], SW: [x, y + U]
+});
 
-/**
- * SVG d'une pièce, ou du quart de pièce affiché dans une case.
- * @param {string} type  clé de M.FORMES
- * @param {string|null} variante  coin de l'angle droit, pour le triangle
- * @param {string|null} part  quart affiché ; null = la pièce entière (palettes, légendes)
- */
-function svgForme(type, variante = null, part = null) {
-  const c = M.CSS_COULEURS[M.couleurDe(type, modeEtoileCourant())];
-  const [dy, dx] = part ? M.DECALAGE[part] : [0, 0];
-  const vue = part ? `${dx * 100} ${dy * 100} 100 100` : `0 0 ${B} ${B}`;
-  const classe = 'svg-forme' + (part ? ' svg-plein' : '');
+/** Coins voisins d'un coin (ceux avec lesquels il partage un bord de case). */
+const COINS_VOISINS = { NW: ['NE', 'SW'], NE: ['NW', 'SE'], SE: ['NE', 'SW'], SW: ['NW', 'SE'] };
 
-  // Une face qui renvoie à 90° : trait plein, avec un liseré clair qui la fait briller.
-  const miroir = ([x1, y1, x2, y2]) =>
-    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="20" stroke-linecap="round"/>
-     <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#ffffff" stroke-opacity=".62" stroke-width="6" stroke-linecap="round"/>`;
-  // Une face qui renvoie à 180°, comme un mur : trait en pointillés.
-  const mur = ([x1, y1, x2, y2]) =>
-    `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="18"
-       stroke-linecap="butt" stroke-dasharray="21 15"/>`;
-
-  let contenu;
-  switch (type) {
-    case 'triangle': {
-      const t = TRIANGLE[variante] || TRIANGLE.NW;
-      contenu = `<polygon points="${trace(t.pts)}" fill="${c}" fill-opacity=".26"/>
-        ${t.murs.map(mur).join('')}${miroir(t.hypo)}`;
-      break;
-    }
-    case 'carre':
-      // Les quatre faces sont des murs : contour entièrement en pointillés.
-      contenu = `<rect x="${M0}" y="${M0}" width="${M1 - M0}" height="${M1 - M0}" rx="16"
-        fill="${c}" fill-opacity=".3" stroke="${c}" stroke-width="18" stroke-dasharray="21 15"/>`;
-      break;
-    case 'losange': {
-      // Les quatre faces sont des miroirs : contour brillant.
-      const pts = trace([[100, 10], [190, 100], [100, 190], [10, 100]]);
-      contenu = `<polygon points="${pts}" fill="${c}" fill-opacity=".3"
-          stroke="${c}" stroke-width="20" stroke-linejoin="round"/>
-        <polygon points="${pts}" fill="none" stroke="#ffffff" stroke-opacity=".55"
-          stroke-width="6" stroke-linejoin="round"/>`;
-      break;
-    }
-    case 'etoile':
-      // Aucune face n'agit : ni pointillés, ni éclat, le laser passe.
-      contenu = `<polygon points="${ETOILE_POINTS}" fill="${c}" fill-opacity=".42"
-        stroke="${c}" stroke-width="9" stroke-linejoin="round"/>`;
-      break;
-    default:
-      return '';
-  }
-  return `<svg class="${classe}" viewBox="${vue}" aria-hidden="true" focusable="false">${contenu}</svg>`;
+/** Segment d'un bord de case. */
+function bordDeLaCase(x, y, bord) {
+  const c = coinsDeLaCase(x, y);
+  return { N: [c.NW, c.NE], S: [c.SW, c.SE], W: [c.NW, c.SW], E: [c.NE, c.SE] }[bord];
 }
 
-/** Étoile dessinée aux couleurs d'un mode précis (pour les légendes). */
+/** Demi-case contenant un coin donné : ses trois sommets, et sa diagonale. */
+function demiCase(coin, x, y) {
+  const c = coinsDeLaCase(x, y);
+  const [a, b] = COINS_VOISINS[coin];
+  return { sommets: [c[coin], c[a], c[b]], diagonale: [c[a], c[b]] };
+}
+
+const pts = (liste) => liste.map((p) => p.join(',')).join(' ');
+const VOISIN = { N: [-1, 0], S: [1, 0], E: [0, 1], W: [0, -1] };
+
+/**
+ * SVG d'une pièce, ou de la seule case affichée dans une cellule du plateau.
+ * @param {string} type  clé de M.FORMES
+ * @param {string|null} variante
+ * @param {number|null} dr,dc  case à cadrer ; null = la pièce entière
+ */
+function svgForme(type, variante = null, dr = null, dc = null) {
+  const cases = M.gabarit(type, variante);
+  const occupees = new Set(cases.map((x) => `${x.dr},${x.dc}`));
+  const c = M.CSS_COULEURS[M.couleurDe(type, modeEtoileCourant())];
+
+  const corps = [];
+  for (const cellule of cases) {
+    const x = cellule.dc * U, y = cellule.dr * U;
+
+    if (cellule.role === 'filtre') {
+      corps.push(`<polygon points="${pts(ETOILE_POINTS.map(([px, py]) => [x + px, y + py]))}"
+        fill="${c}" fill-opacity=".45" stroke="${c}" stroke-width="9" stroke-linejoin="round"/>`);
+      continue;
+    }
+
+    // Matière de la case, et faces qui la bordent.
+    let murs = [];
+    if (cellule.role === 'mur') {
+      corps.push(`<rect x="${x}" y="${y}" width="${U}" height="${U}" fill="${c}" fill-opacity=".3"/>`);
+      murs = ['N', 'S', 'E', 'W'];
+    } else if (cellule.role === 'triangle') {
+      const d = demiCase(cellule.coin, x, y);
+      corps.push(`<polygon points="${pts(d.sommets)}" fill="${c}" fill-opacity=".3"/>`);
+      corps.push(miroir(d.diagonale, c));
+      murs = M.BORDS_DU_COIN[cellule.coin];
+    } else if (cellule.role === 'miroir') {
+      // Quart de losange : la matière est du côté du centre du bloc.
+      const d = demiCase(M.COIN_OPPOSE[cellule.part], x, y);
+      corps.push(`<polygon points="${pts(d.sommets)}" fill="${c}" fill-opacity=".3"/>`);
+      corps.push(miroir(d.diagonale, c));
+    }
+
+    // Un bord n'est dessiné que s'il donne sur l'extérieur : les jointures
+    // entre deux cases d'une même pièce ne sont pas des faces.
+    for (const bord of murs) {
+      const [vr, vc] = VOISIN[bord];
+      if (occupees.has(`${cellule.dr + vr},${cellule.dc + vc}`)) continue;
+      corps.push(mur(bordDeLaCase(x, y, bord), c));
+    }
+  }
+
+  const { h, l } = M.encombrement(type, variante);
+  const vue = (dr === null)
+    ? `${-MARGE} ${-MARGE} ${l * U + 2 * MARGE} ${h * U + 2 * MARGE}`
+    : `${dc * U} ${dr * U} ${U} ${U}`;
+  const classe = 'svg-forme' + (dr === null ? '' : ' svg-plein');
+  return `<svg class="${classe}" viewBox="${vue}" aria-hidden="true" focusable="false">${corps.join('')}</svg>`;
+}
+
+/** Face qui renvoie à 90° : trait plein, avec un liseré clair qui la fait briller. */
+function miroir([[x1, y1], [x2, y2]], c) {
+  return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="17" stroke-linecap="round"/>
+    <line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="#ffffff" stroke-opacity=".6" stroke-width="5" stroke-linecap="round"/>`;
+}
+
+/** Face qui renvoie à 180°, comme un mur : trait en pointillés. */
+function mur([[x1, y1], [x2, y2]], c) {
+  return `<line x1="${x1}" y1="${y1}" x2="${x2}" y2="${y2}" stroke="${c}" stroke-width="15"
+    stroke-linecap="butt" stroke-dasharray="18 13"/>`;
+}
+
+/** Étoile dessinée aux couleurs d'un mode précis, pour les légendes. */
 function svgEtoileMode(mode) {
   const c = M.CSS_COULEURS[M.COULEUR_MODE_ETOILE[mode]];
-  return `<svg class="svg-forme" viewBox="0 0 ${B} ${B}" aria-hidden="true" focusable="false">
-    <polygon points="${ETOILE_POINTS}" fill="${c}" fill-opacity=".45"
+  return `<svg class="svg-forme" viewBox="${-MARGE} ${-MARGE} ${U + 2 * MARGE} ${U + 2 * MARGE}"
+    aria-hidden="true" focusable="false">
+    <polygon points="${pts(ETOILE_POINTS)}" fill="${c}" fill-opacity=".45"
       stroke="${c}" stroke-width="9" stroke-linejoin="round"/></svg>`;
 }
 
-/** SVG de la case occupée (chaque case connaît le quart qu'elle représente). */
-const svgDe = (f) => svgForme(f.type, f.variante ?? null, f.part ?? null);
+/** SVG de la case occupée (chaque case connaît sa position dans la pièce). */
+const svgDe = (f) => svgForme(f.type, f.variante ?? null, f.dr, f.dc);
 
-/** Variantes affichables d'un type : [null], ou les quatre orientations du triangle. */
+/** Variantes affichables d'un type. */
 const variantesDe = (type) => M.variantesDe(type);
 
 /** Mode d'étoile en vigueur, selon l'écran affiché. */
@@ -138,7 +168,7 @@ function pastille(couleur) {
   return `<span class="pastille" style="background:${M.CSS_COULEURS[couleur]}"></span><strong>${couleur}</strong>`;
 }
 
-const ECRANS = ['menu', 'regles', 'config', 'placement', 'passage', 'tour', 'fin', 'labo'];
+const ECRANS = ['menu', 'regles', 'config', 'placement', 'passage', 'tour', 'ia', 'fin', 'labo'];
 let ecranCourant = 'menu';
 function montrer(nom) {
   ecranCourant = nom;
@@ -289,16 +319,20 @@ function htmlMelanges() {
 }
 
 const DESCRIPTIONS = {
-  triangle: 'Bloc de <strong>2 × 2 cases</strong>, quatre orientations désignées par le coin où se '
-    + 'trouve l\'angle droit. Ses <strong>trois faces agissent</strong>, mais différemment : '
-    + 'l\'<strong>hypoténuse</strong> (la face brillante) renvoie le laser à 90°, les deux '
-    + '<strong>cathètes</strong> (les faces en pointillés) le renvoient à 180°, comme un carré. '
-    + 'Le quart opposé à l\'angle droit est hors du triangle : le laser le traverse sans être teinté.',
-  carre:    'Bloc de <strong>2 × 2 cases</strong>. Ses quatre faces sont des murs : le laser repart '
+  triangle: '<strong>Trois cases.</strong> Quatre orientations, désignées par le coin où se trouve '
+    + 'l\'angle droit. Ses trois faces agissent, mais différemment : l\'<strong>hypoténuse</strong> '
+    + '(la face brillante) renvoie le laser à 90°, les deux <strong>cathètes</strong> (les faces en '
+    + 'pointillés) le renvoient à 180°, comme un carré. Le quart de bloc opposé à l\'angle droit ne '
+    + 'lui appartient pas : il reste libre, et une étoile peut très bien s\'y loger.',
+  carre:    '<strong>Bloc de 2 × 2 cases.</strong> Ses quatre faces sont des murs : le laser repart '
     + 'toujours exactement d\'où il vient, quel que soit le bord par lequel il entre.',
-  losange:  'Bloc de <strong>2 × 2 cases</strong>. Ses quatre faces sont des miroirs, chacune sur sa '
+  losange:  '<strong>Bloc de 2 × 2 cases.</strong> Ses quatre faces sont des miroirs, chacune sur sa '
     + 'propre case : on sait donc toujours laquelle a été touchée. Le laser rebondit à 90° et ne '
     + 'traverse jamais.',
+  navette:  '<strong>Quatre cases en ligne</strong>, deux pleines au milieu et une pointe à chaque '
+    + 'bout. Les deux pointes sont coupées dans le même sens, ce qui donne une pièce en biais. '
+    + 'Debout ou couchée, et dans un sens ou dans l\'autre : quatre variantes. Les pointes renvoient '
+    + 'à 90° sur leur hypoténuse et à 180° sur leurs cathètes, les cases pleines à 180° partout.',
   etoile:   '<strong>Une seule case</strong> — elle ne dévie rien, il n\'y a aucune face à identifier. '
     + 'Le laser la <strong>traverse tout droit</strong> et n\'en ressort que recoloré. Son effet exact '
     + 'dépend du <strong>mode choisi à la configuration</strong>, le même pour les deux joueurs.'
@@ -335,7 +369,8 @@ function htmlFiches() {
 const DEFAUT = {
   lignes: 8, colonnes: 8,
   modeEtoile: M.MODE_ETOILE_DEFAUT,
-  counts: { triangle: 2, carre: 1, losange: 1, etoile: 1 }
+  solo: false, niveauIA: 'facile',
+  counts: { triangle: 2, carre: 1, losange: 1, navette: 0, etoile: 1 }
 };
 let cfgBrouillon = { ...DEFAUT, counts: { ...DEFAUT.counts } };
 const dimBrouillon = () => M.dim(cfgBrouillon.lignes, cfgBrouillon.colonnes);
@@ -351,15 +386,20 @@ function creerJoueur(nom) {
     tires: [],           // bords déjà utilisés comme ENTRÉE, 'cote:index'
     journal: [],         // toutes ses actions
     recap: null,         // actions de son tour précédent
-    nbTirs: 0
+    nbTirs: 0,
+    memoireIA: null,     // observations de l'IA, si ce joueur est tenu par elle
+    journalIA: []        // ce que l'IA a fait, tel que le joueur humain l'a vu
   };
 }
 
 function nouvellePartie(cfg) {
+  cerveau = null;
   S = {
     cfg: {
       dim: M.dim(cfg.lignes, cfg.colonnes),
       modeEtoile: cfg.modeEtoile,
+      solo: !!cfg.solo,
+      niveauIA: cfg.niveauIA,
       counts: { ...cfg.counts },
       noms: [...cfg.noms]
     },
@@ -378,6 +418,22 @@ function nouvellePartie(cfg) {
 
 const adversaireDe = (i) => S.joueurs[1 - i];
 
+/** En solo, le joueur 2 est tenu par l'IA. */
+const estIA = (i) => S.cfg.solo && i === 1;
+
+/** Cerveau de l'IA — reconstruit à la demande, sa mémoire vit dans le joueur. */
+let cerveau = null;
+function obtenirCerveau() {
+  if (!S.cfg.solo) return null;
+  if (!cerveau) {
+    cerveau = IA.creerIA(
+      { dim: S.cfg.dim, counts: S.cfg.counts, modeEtoile: S.cfg.modeEtoile },
+      S.cfg.niveauIA);
+    cerveau.restaurer(S.joueurs[1].memoireIA || {});
+  }
+  return cerveau;
+}
+
 /** Nombre de pièces adverses correctement annoncées (un losange = 1 pièce, 4 cases). */
 const nbTrouve = (joueur) => new Set([...joueur.trouve.values()].map((v) => v.id)).size;
 
@@ -385,19 +441,20 @@ const nbTrouve = (joueur) => new Set([...joueur.trouve.values()].map((v) => v.id
    Une partie se joue sur un seul appareil, souvent un téléphone : verrouillage
    de l'écran, appel entrant ou onglet rechargé ne doivent pas faire perdre la
    partie. On sérialise l'état complet après chaque action. */
-const CLE_SAUVEGARDE = 'bataille-prismatique/partie/v3';
+const CLE_SAUVEGARDE = 'bataille-prismatique/partie/v4';
 
 function sauver() {
   if (!S) return;
   try {
     localStorage.setItem(CLE_SAUVEGARDE, JSON.stringify({
-      v: 3,
+      v: 4,
       cfg: S.cfg, total: S.total, courant: S.courant, agit: S.agit,
       numeroTour: S.numeroTour, phase: S.phase, placementIndex: S.placementIndex,
       passage: S.passage, actionsTour: S.actionsTour, resultat: S.resultat,
       joueurs: S.joueurs.map((j) => ({
         nom: j.nom, grille: [...j.grille], trouve: [...j.trouve], rates: [...j.rates],
-        marques: j.marques, tires: j.tires, journal: j.journal, recap: j.recap, nbTirs: j.nbTirs
+        marques: j.marques, tires: j.tires, journal: j.journal, recap: j.recap, nbTirs: j.nbTirs,
+        memoireIA: j.memoireIA, journalIA: j.journalIA
       }))
     }));
   } catch { /* mode privé ou quota plein : on joue sans filet */ }
@@ -412,7 +469,7 @@ function lireSauvegarde() {
     const brut = localStorage.getItem(CLE_SAUVEGARDE);
     if (!brut) return null;
     const d = JSON.parse(brut);
-    return (d && d.v === 3 && Array.isArray(d.joueurs) && d.joueurs.length === 2) ? d : null;
+    return (d && d.v === 4 && Array.isArray(d.joueurs) && d.joueurs.length === 2) ? d : null;
   } catch { return null; }
 }
 
@@ -432,10 +489,14 @@ function reprendrePartie() {
       tires: j.tires || [],
       journal: j.journal || [],
       recap: j.recap || null,
-      nbTirs: j.nbTirs || 0
+      nbTirs: j.nbTirs || 0,
+      memoireIA: j.memoireIA || null,
+      journalIA: j.journalIA || []
     }))
   };
+  cerveau = null;
   if (S.phase === 'passage' && S.passage) allerPassage(S.passage.nom, S.passage.note, S.passage.suite);
+  else if (S.phase === 'ia') jouerTourIA();          // le tour de l'IA se rejoue en entier
   else if (S.phase === 'tour') rendreTour();
   else lancerPlacement(S.placementIndex ?? 0);
   return true;
@@ -484,6 +545,14 @@ function ouvrirConfig() {
 }
 
 function rendreConfig() {
+  for (const b of $$('#cfg-mode-jeu .seg')) b.classList.toggle('actif', (b.dataset.solo === '1') === cfgBrouillon.solo);
+  $('#cfg-ia-boite').hidden = !cfgBrouillon.solo;
+  $('#cfg-nom2-boite').hidden = cfgBrouillon.solo;
+  $('#cfg-label-nom1').textContent = cfgBrouillon.solo ? 'Ton pseudo' : 'Joueur 1';
+  for (const b of $$('#cfg-ia .seg')) b.classList.toggle('actif', b.dataset.niveau === cfgBrouillon.niveauIA);
+  $('#cfg-ia-detail').innerHTML =
+    `<strong>${IA.INFOS_NIVEAU[cfgBrouillon.niveauIA].nom}</strong> — ${IA.INFOS_NIVEAU[cfgBrouillon.niveauIA].resume}`;
+
   $('#cfg-lignes').value = cfgBrouillon.lignes;
   $('#cfg-colonnes').value = cfgBrouillon.colonnes;
   $('#cfg-dim-resume').textContent =
@@ -501,7 +570,7 @@ function rendreConfig() {
     return `<div class="inv-ligne">
       <span class="inv-glyphe">${svgForme(type, variantesDe(type)[0])}</span>
       <span class="inv-nom">${d.nom}<small>teinte ${M.couleurDe(type, cfgBrouillon.modeEtoile)} · ${
-        M.emprise(type) > 1 ? 'bloc 2 × 2' : '1 case'}</small></span>
+        pluriel(M.emprise(type), 'case')}</small></span>
       <button class="btn" type="button" data-inv="${type}" data-pas="-1" aria-label="Moins de ${d.nom}">−</button>
       <span class="inv-compteur" id="inv-${type}">${cfgBrouillon.counts[type]}</span>
       <button class="btn" type="button" data-inv="${type}" data-pas="1" aria-label="Plus de ${d.nom}">+</button>
@@ -519,21 +588,32 @@ function rendreConfig() {
   const total = M.totalPieces(cfgBrouillon.counts);
   const cases = M.cellulesRequises(cfgBrouillon.counts);
   const plafond = plafondCases();
-  const blocsPossibles = Math.max(0, Math.floor(cfgBrouillon.lignes / 2) * Math.floor(cfgBrouillon.colonnes / 2));
-  const blocs = M.ORDRE_FORMES.filter((t) => M.FORMES[t].bloc).reduce((n, t) => n + cfgBrouillon.counts[t], 0);
-
   let alerte = '';
   if (total === 0) alerte = 'Il faut au moins une forme par joueur.';
   else if (cases > plafond) alerte = `${cases} cases occupées : c'est trop pour une grille `
-    + `${cfgBrouillon.colonnes}×${cfgBrouillon.lignes} (maximum ${plafond}). Chaque bloc en occupe 4.`;
-  else if (blocs > blocsPossibles) alerte = `${blocs} blocs de 2 × 2 ne rentrent pas dans une grille `
-    + `${cfgBrouillon.colonnes}×${cfgBrouillon.lignes}.`;
+    + `${cfgBrouillon.colonnes}×${cfgBrouillon.lignes} (maximum ${plafond}).`;
+  else if (!inventaireCasable()) alerte = 'Cet inventaire ne rentre pas dans une grille '
+    + `${cfgBrouillon.colonnes}×${cfgBrouillon.lignes} : les pièces se gênent les unes les autres.`;
 
   $('#cfg-total').innerHTML = alerte
     ? `<span class="avert">${alerte}</span>`
     : `<strong>${pluriel(total, 'forme')}</strong> à cacher (${cases} cases sur ${plafond} disponibles)
        — et donc <strong>${pluriel(total, 'call')}</strong> à réussir pour gagner.`;
   $('#cfg-lancer').disabled = !!alerte;
+}
+
+/**
+ * Toutes les pièces peuvent-elles vraiment coexister sur cette grille ? Plutôt
+ * qu'une formule approximative, on essaie réellement de les poser : c'est le
+ * seul test qui ne se trompe pas, et il coûte quelques millisecondes.
+ */
+function inventaireCasable() {
+  const d = dimBrouillon();
+  const attendu = M.totalPieces(cfgBrouillon.counts);
+  for (let essai = 0; essai < 12; essai++) {
+    if (M.compterPieces(M.placementAleatoire(d, cfgBrouillon.counts)) === attendu) return true;
+  }
+  return false;
 }
 
 /** Le plateau doit rester majoritairement vide pour que la déduction ait du sens. */
@@ -582,8 +662,24 @@ for (const b of $$('#cfg-etoile .seg')) {
   b.addEventListener('click', () => { cfgBrouillon.modeEtoile = b.dataset.mode; rendreConfig(); });
 }
 
+for (const b of $$('#cfg-mode-jeu .seg')) {
+  b.addEventListener('click', () => {
+    cfgBrouillon.solo = b.dataset.solo === '1';
+    // On ajuste le pseudo par défaut, sans écraser ce que le joueur a saisi.
+    const champ = $('#nom1');
+    if (cfgBrouillon.solo && champ.value.trim() === 'Joueur 1') champ.value = 'Toi';
+    else if (!cfgBrouillon.solo && champ.value.trim() === 'Toi') champ.value = 'Joueur 1';
+    rendreConfig();
+  });
+}
+for (const b of $$('#cfg-ia .seg')) {
+  b.addEventListener('click', () => { cfgBrouillon.niveauIA = b.dataset.niveau; rendreConfig(); });
+}
+
 $('#cfg-lancer').addEventListener('click', () => {
-  const noms = [$('#nom1').value.trim() || 'Joueur 1', $('#nom2').value.trim() || 'Joueur 2'];
+  const noms = cfgBrouillon.solo
+    ? [$('#nom1').value.trim() || 'Toi', IA.INFOS_NIVEAU[cfgBrouillon.niveauIA].nom]
+    : [$('#nom1').value.trim() || 'Joueur 1', $('#nom2').value.trim() || 'Joueur 2'];
   if (noms[0] === noms[1]) { noms[0] += ' (1)'; noms[1] += ' (2)'; }
   effacerSauvegarde();
   nouvellePartie({ ...cfgBrouillon, noms });
@@ -636,24 +732,36 @@ function clicPlacement(r, c) {
     // n'importe quel autre clic retire la pièce entière (les 4 cases d'un bloc).
     if (outil && outil.type === presente.type && M.FORMES[presente.type].variantes) {
       const v = (presente.variante === outil.variante)
-        ? M.varianteSuivante(grille, r, c)
-        : M.changerVariante(grille, r, c, outil.variante);
-      placement.outil = { type: presente.type, variante: v };
+        ? M.varianteSuivante(grille, S.cfg.dim, r, c)
+        : M.changerVariante(grille, S.cfg.dim, r, c, outil.variante);
+      if (v) placement.outil = { type: presente.type, variante: v };
     } else {
       M.retirerPiece(grille, r, c);
     }
   } else if (outil && stockRestant()[outil.type] > 0) {
-    // Un bloc posé près d'un bord se recale pour tenir entièrement dans la grille.
-    const [ar, ac] = M.ancreValide(outil.type, S.cfg.dim, r, c);
-    const pose = M.poserPiece(grille, S.cfg.dim, outil.type, ar, ac, outil.variante ?? null);
-    if (!pose) {
-      $('#place-etat').innerHTML =
-        `<span class="avert">Pas la place ici : ${M.FORMES[outil.type].nom.toLowerCase()} occupe un bloc de 2 × 2 cases libres.</span>`;
+    if (!poserDepuisClic(grille, S.cfg.dim, outil, r, c)) {
+      const { h, l } = M.encombrement(outil.type, outil.variante);
+      $('#place-etat').innerHTML = `<span class="avert">Pas la place ici : ${
+        M.FORMES[outil.type].nom.toLowerCase()} occupe ${h} × ${l} cases libres.</span>`;
       return;
     }
     if (stockRestant()[outil.type] === 0) choisirOutilDisponible();
   }
   rendrePlacement();
+}
+
+/**
+ * Pose une forme à partir de la case cliquée, qui est sa CASE DE POSE : le coin
+ * en bas à gauche d'un carré ou d'un losange, la case pleine d'un triangle, la
+ * case pleine du bas (ou de gauche) d'une navette. Si la pièce dépasse d'un
+ * bord, on la recale au plus près plutôt que de refuser le clic.
+ */
+function poserDepuisClic(grille, d, outil, r, c) {
+  const v = outil.variante ?? null;
+  const [ar, ac] = M.ancreDepuisReference(outil.type, v, r, c);
+  if (M.poserPiece(grille, d, outil.type, ar, ac, v)) return true;
+  const [rr, rc] = M.ancreValide(outil.type, v, d, ar, ac);
+  return M.poserPiece(grille, d, outil.type, rr, rc, v);
 }
 
 function rendrePlacement() {
@@ -702,6 +810,13 @@ $('#place-vide').addEventListener('click', () => {
   rendrePlacement();
 });
 $('#place-valider').addEventListener('click', () => {
+  if (placement.i === 0 && S.cfg.solo) {
+    // L'IA cache ses formes elle-même : rien à se passer de main en main.
+    S.joueurs[1].grille = obtenirCerveau().placer();
+    S.courant = 0;
+    demarrerTour();
+    return;
+  }
   if (placement.i === 0) {
     allerPassage(S.joueurs[1].nom, 'C\'est au tour de l\'autre joueur de cacher ses formes.', 'placer1');
   } else {
@@ -768,6 +883,12 @@ function rendreTour() {
 
   $('#tour-melanges').innerHTML = htmlMelanges();
   $('#tour-mode-etoile').innerHTML = htmlModesEtoile(S.cfg.modeEtoile);
+  const boiteIA = $('#tour-ia-boite');
+  boiteIA.hidden = !S.cfg.solo || !joueur.journalIA.length;
+  if (!boiteIA.hidden) {
+    $('#tour-ia-journal').innerHTML =
+      [...joueur.journalIA].reverse().map((h) => `<li>${h}</li>`).join('');
+  }
   $('#tour-resultat').hidden = true;
   $('#tour-consigne').innerHTML =
     'Clique une <strong>flèche</strong> pour tirer un laser, ou une <strong>case</strong> pour faire un call.';
@@ -932,7 +1053,7 @@ function executerTir(cote, index) {
     entree.classList.add('surligne');
     if (res.statut === 'sorti') plateauTour.bords[res.coteSortie][res.indexSortie]?.classList.add('surligne');
 
-    afficherResultat(html, '', 'Terminer le tour — passer l\'appareil', 'fin');
+    afficherResultat(html, '', texteFinDeTour(), 'fin');
   }, 420);
 }
 
@@ -950,18 +1071,27 @@ function clicCall(r, c) {
     return;
   }
 
-  // Un bloc s'annonce par son coin inférieur gauche : il s'étend donc vers le
-  // haut et vers la droite. Près du bord haut ou du bord droit, aucun bloc ne
-  // peut avoir son coin ici — seule l'étoile reste possible.
-  const blocPossible = r >= 1 && c <= S.cfg.dim.colonnes - 2;
-  const proposables = M.ORDRE_FORMES.filter(
-    (t) => S.cfg.counts[t] > 0 && (blocPossible || !M.FORMES[t].bloc));
+  /*
+     La case visée est la case d'ANNONCE de la pièce : la plus basse, et la plus
+     à gauche à égalité. La forme s'étend donc vers le haut et/ou la droite, et
+     près d'un bord certaines déclinaisons ne peuvent tout simplement pas avoir
+     leur case d'annonce ici. On ne propose que celles qui tiennent — c'est de
+     la géométrie visible, pas une indiscrétion sur la grille adverse.
+  */
+  const tientIci = (type, variante) => {
+    const [dr, dc] = M.decalageCall(type, variante);
+    const { h, l } = M.encombrement(type, variante);
+    const ar = r - dr, ac = c - dc;
+    return ar >= 0 && ac >= 0 && ar + h <= S.cfg.dim.lignes && ac + l <= S.cfg.dim.colonnes;
+  };
+  const proposables = M.ORDRE_FORMES
+    .filter((t) => S.cfg.counts[t] > 0)
+    .flatMap((type) => variantesDe(type).filter((v) => tientIci(type, v)).map((v) => ({ type, variante: v })));
 
   if (!proposables.length) {
     ouvrirModale({
       titre: M.nomCase(r, c),
-      corps: `<p>Aucune forme de cette partie ne peut avoir sa case en bas à gauche ici :
-        un bloc de 2 × 2 s'étend vers le haut et vers la droite.</p>`,
+      corps: '<p>Aucune forme de cette partie ne peut avoir sa case d\'annonce ici : trop près du bord.</p>',
       actions: [{ texte: 'Fermer', classe: 'primaire', onClic: fermerModale }]
     });
     return;
@@ -969,35 +1099,31 @@ function clicCall(r, c) {
 
   let choix = null;
   const corps = document.createElement('div');
-  const etendue = blocPossible
-    ? `Un bloc de 2 × 2 s'annonce toujours par son coin inférieur gauche : ici, il couvrirait
-       ${M.nomCase(r, c)}, ${M.nomCase(r, c + 1)}, ${M.nomCase(r - 1, c)} et ${M.nomCase(r - 1, c + 1)}.`
-    : 'Trop près du bord pour qu\'un bloc de 2 × 2 ait son coin ici : seule l\'étoile est possible.';
   corps.innerHTML = `<p>Annonce la forme dont <strong>${M.nomCase(r, c)}</strong> est la
-    <strong>case en bas à gauche</strong>, sur la grille de ${ech(adversaireDe(S.courant).nom)}.</p>
-    <p class="note">${etendue}</p>
+    <strong>case d'annonce</strong>, sur la grille de ${ech(adversaireDe(S.courant).nom)}.</p>
+    <p class="note">Une forme s'annonce toujours par sa case la plus basse — la plus à gauche
+    s'il y en a plusieurs. Elle s'étend donc vers le haut et vers la droite depuis
+    ${M.nomCase(r, c)}.</p>
     <div class="choix-formes"></div>
     <p class="avert">Si tu as raison, la forme est révélée et tu rejoues.
     Si tu te trompes, tu ne sauras rien de plus et le tour passe à l'adversaire.</p>`;
 
   const zone = $('.choix-formes', corps);
-  for (const type of proposables) {
-    for (const o of variantesDe(type)) {
-      const b = document.createElement('button');
-      b.type = 'button';
-      b.className = 'pal-btn';
-      b.innerHTML = `<span class="pal-glyphe">${svgForme(type, o)}</span>
-        <span class="pal-reste">${M.FORMES[type].nom}</span>`;
-      b.setAttribute('aria-label', libelleLong(type, o));
-      b.title = libelleLong(type, o);
-      b.addEventListener('click', () => {
-        choix = { type, variante: o };
-        for (const autre of $$('.pal-btn', zone)) autre.classList.remove('actif');
-        b.classList.add('actif');
-        $('#modale-confirmer').disabled = false;
-      });
-      zone.appendChild(b);
-    }
+  for (const { type, variante } of proposables) {
+    const b = document.createElement('button');
+    b.type = 'button';
+    b.className = 'pal-btn';
+    b.innerHTML = `<span class="pal-glyphe">${svgForme(type, variante)}</span>
+      <span class="pal-reste">${M.FORMES[type].nom}</span>`;
+    b.setAttribute('aria-label', libelleLong(type, variante));
+    b.title = libelleLong(type, variante);
+    b.addEventListener('click', () => {
+      choix = { type, variante };
+      for (const autre of $$('.pal-btn', zone)) autre.classList.remove('actif');
+      b.classList.add('actif');
+      $('#modale-confirmer').disabled = false;
+    });
+    zone.appendChild(b);
   }
 
   ouvrirModale({
@@ -1057,15 +1183,19 @@ function executerCall(r, c, forme) {
   rendreJournal(joueur);
 
   afficherResultat(
-    `<h3>❌ Call raté</h3><p><strong>${nom}</strong> n'est pas la case en bas à gauche
+    `<h3>❌ Call raté</h3><p><strong>${nom}</strong> n'est pas la case d'annonce
      d'${M.nomForme(forme).toLowerCase().startsWith('é') ? 'une' : 'un'} ${M.nomForme(forme)}.</p>
      <p>C'est tout ce que tu apprends : on ne te dira ni quelle forme s'y trouve, ni si la case est
-     vide, ni si tu as visé le mauvais coin d'un bloc.</p>
+     vide, ni si tu as visé la mauvaise case d'une forme pourtant bien là.</p>
      <p class="note">Et tu n'as pas tiré ce tour-ci : aucune information nouvelle sur la grille.</p>`,
-    'ko', 'Terminer le tour — passer l\'appareil', 'fin');
+    'ko', texteFinDeTour(), 'fin');
 }
 
 /* ─────────────── Fin de tour ─────────────── */
+/** Le bouton de fin de tour ne parle d'appareil que s'il y a quelqu'un à qui le passer. */
+const texteFinDeTour = () =>
+  S.cfg.solo ? 'Terminer le tour' : 'Terminer le tour — passer l\'appareil';
+
 /** Suites possibles après l'affichage d'un résultat (clés sérialisables). */
 const APRES = {
   fin: () => finirTour(),
@@ -1099,7 +1229,9 @@ function peindreResultat() {
   boite.appendChild(b);
   boite.hidden = false;
   $('#tour-consigne').innerHTML = S.agit
-    ? '📝 <strong>Note ton résultat</strong> avant de passer l\'appareil.'
+    ? (S.cfg.solo
+        ? '📝 <strong>Note ton résultat</strong>, puis termine ton tour.'
+        : '📝 <strong>Note ton résultat</strong> avant de passer l\'appareil.')
     : 'Tu rejoues : nouvelle flèche pour tirer, ou nouvelle case pour un call.';
 }
 
@@ -1118,8 +1250,123 @@ function finirTour() {
   const joueur = S.joueurs[S.courant];
   joueur.recap = [...S.actionsTour];
   S.courant = 1 - S.courant;
+  if (S.cfg.solo) {
+    // Personne à qui passer l'appareil : on enchaîne directement.
+    if (estIA(S.courant)) jouerTourIA(); else demarrerTour();
+    return;
+  }
   allerPassage(S.joueurs[S.courant].nom, 'Le tour est passé. Ne regarde que si c\'est bien toi.', 'tour');
 }
+
+/* ═════════════════════════ TOUR DE L'IA ═════════════════════════ */
+
+const attendre = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/** Ligne de journal pour une action de l'IA, telle que le joueur la voit. */
+function ligneIA(html) {
+  const li = document.createElement('li');
+  li.innerHTML = html;
+  $('#ia-actions').appendChild(li);
+  return li;
+}
+
+async function jouerTourIA() {
+  const ia = obtenirCerveau();
+  const robot = S.joueurs[1];
+  const humain = S.joueurs[0];
+  S.phase = 'ia';
+  S.actionsTour = [];
+  sauver();                        // point de reprise : le tour se rejouera en entier
+
+  $('#ia-titre').textContent = `🤖 Tour de ${robot.nom}`;
+  $('#ia-sous-titre').textContent =
+    `${nbTrouve(robot)} / ${S.total} de tes formes trouvées · ${pluriel(robot.nbTirs, 'tir')}`;
+  $('#ia-actions').innerHTML = '';
+  $('#ia-continuer').disabled = true;
+  $('#ia-reflexion').hidden = false;
+
+  const vue = construirePlateau($('#ia-plateau'), S.cfg.dim, {});
+  peindreFormes(vue.cases, S.cfg.dim, humain.grille);
+  const marquerVue = () => {
+    for (const [k, info] of Object.entries(robot.marques)) {
+      const [cote, index] = k.split(':');
+      const b = vue.bords[cote]?.[+index];
+      if (!b) continue;
+      const fond = M.CSS_COULEURS[info.couleur];
+      b.classList.add('a-marque');
+      const marque = $('.marque', b);
+      marque.style.background = fond;
+      marque.style.color = texteSur(fond);
+      marque.textContent = info.n;
+    }
+  };
+  marquerVue();
+  montrer('ia');
+
+  let continuer = true;
+  while (continuer) {
+    $('#ia-reflexion').hidden = false;
+    const action = await ia.choisirAction();
+    $('#ia-reflexion').hidden = true;
+    await attendre(180);
+
+    if (action.type === 'tir') {
+      const res = M.tirer(humain.grille, S.cfg.dim, action.cote, action.index, S.cfg.modeEtoile);
+      ia.noterTir(action.cote, action.index, res);
+      const n = ++robot.nbTirs;
+      robot.marques[`${action.cote}:${action.index}`] = { n, couleur: res.couleur };
+      robot.marques[`${res.coteSortie}:${res.indexSortie}`] = { n, couleur: res.couleur };
+      robot.tires.push(`${action.cote}:${action.index}`);
+      const html = res.retour
+        ? `🔦 <strong>Tir n°${n}</strong> — ${CAP(action.cote)} ${action.index} → <em>retour à l'entrée</em> ${pastille(res.couleur)}`
+        : `🔦 <strong>Tir n°${n}</strong> — ${CAP(action.cote)} ${action.index} → ${CAP(res.coteSortie)} ${res.indexSortie} ${pastille(res.couleur)}`;
+      ligneIA(html);
+      humain.journalIA.push(html);
+      robot.journal.push({ html, classe: '', tir: n });
+      marquerVue();
+      continuer = false;
+    } else {
+      const nom = M.nomCase(action.r, action.c);
+      const reelle = humain.grille.get(M.cle(action.r, action.c));
+      const juste = !!reelle && M.estCaseDeCall(reelle) && M.memeForme(reelle, action.forme);
+
+      if (juste) {
+        for (const kc of M.casesDeLaPiece(humain.grille, action.r, action.c)) {
+          robot.trouve.set(kc, { ...humain.grille.get(kc) });
+        }
+        ia.noterCall(action.r, action.c, action.forme, true, {
+          type: reelle.type, r: reelle.ancre[0], c: reelle.ancre[1], variante: reelle.variante ?? null
+        });
+        const html = `✅ <strong>Call ${nom}</strong> = ${M.nomForme(action.forme)} — trouvé, elle rejoue`;
+        ligneIA(html);
+        humain.journalIA.push(html);
+        robot.journal.push({ html, classe: 'est-call-ok' });
+        $('#ia-sous-titre').textContent =
+          `${nbTrouve(robot)} / ${S.total} de tes formes trouvées · ${pluriel(robot.nbTirs, 'tir')}`;
+        robot.memoireIA = ia.memoire();
+        if (nbTrouve(robot) === S.total) { terminerPartie(1); return; }
+        await attendre(450);
+        continuer = true;
+      } else {
+        ia.noterCall(action.r, action.c, action.forme, false, null);
+        const html = `❌ <strong>Call ${nom}</strong> = ${M.nomForme(action.forme)} — raté`;
+        ligneIA(html);
+        humain.journalIA.push(html);
+        robot.journal.push({ html, classe: 'est-call-ko' });
+        continuer = false;
+      }
+    }
+    robot.memoireIA = ia.memoire();
+  }
+
+  robot.recap = [];
+  S.courant = 0;
+  S.phase = 'tour';
+  sauver();
+  $('#ia-continuer').disabled = false;
+}
+
+$('#ia-continuer').addEventListener('click', () => demarrerTour());
 
 $('#tour-abandon').addEventListener('click', () => {
   ouvrirModale({
@@ -1156,7 +1403,8 @@ $('#fin-rejouer').addEventListener('click', () => {
   effacerSauvegarde();
   nouvellePartie({
     lignes: S.cfg.dim.lignes, colonnes: S.cfg.dim.colonnes,
-    modeEtoile: S.cfg.modeEtoile, counts: S.cfg.counts, noms: S.cfg.noms
+    modeEtoile: S.cfg.modeEtoile, solo: S.cfg.solo, niveauIA: S.cfg.niveauIA,
+    counts: S.cfg.counts, noms: S.cfg.noms
   });
   lancerPlacement(0);
 });
@@ -1183,12 +1431,11 @@ function clicLabo(r, c) {
     M.retirerPiece(labo.grille, r, c);
   } else if (presente) {
     const v = (presente.variante === labo.outil.variante)
-      ? M.varianteSuivante(labo.grille, r, c)
-      : M.changerVariante(labo.grille, r, c, labo.outil.variante);
-    labo.outil = { type: presente.type, variante: v };
+      ? M.varianteSuivante(labo.grille, labo.dim, r, c)
+      : M.changerVariante(labo.grille, labo.dim, r, c, labo.outil.variante);
+    if (v) labo.outil = { type: presente.type, variante: v };
   } else {
-    const [ar, ac] = M.ancreValide(labo.outil.type, labo.dim, r, c);
-    M.poserPiece(labo.grille, labo.dim, labo.outil.type, ar, ac, labo.outil.variante ?? null);
+    poserDepuisClic(labo.grille, labo.dim, labo.outil, r, c);
   }
   rendreLabo();
 }

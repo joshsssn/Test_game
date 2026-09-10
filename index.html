@@ -67,8 +67,10 @@
       résultat. Retirer depuis la sortie d'un tir précédent peut donc apprendre quelque chose.</p>
 
     <h3>Les couleurs</h3>
-    <p>Le laser part <strong>blanc</strong>. Chaque forme traversée ajoute sa teinte au mélange —
-      une même forme traversée deux fois ne compte qu'une fois. Les 16 résultats possibles :</p>
+    <p>Le laser part <strong>blanc</strong>. Chaque forme rencontrée ajoute sa teinte au mélange —
+      une même forme touchée deux fois ne compte qu'une fois. Cinq teintes de base, donc 32 résultats
+      possibles. À ce nombre, l'œil ne suffit plus : c'est le <strong>nom</strong> écrit dans le
+      journal qui fait foi, la nuance n'est qu'un repère.</p>
     <div id="regles-melanges" class="melanges"></div>
 
     <h3>Bon à savoir</h3>
@@ -98,10 +100,28 @@
     <h2>Configuration de la partie</h2>
 
     <div class="champ">
-      <label for="nom1">Joueur 1</label>
+      <label>Adversaire</label>
+      <div class="segments" id="cfg-mode-jeu">
+        <button class="btn seg actif" type="button" data-solo="0">👥 2 joueurs</button>
+        <button class="btn seg" type="button" data-solo="1">🤖 1 joueur — contre l'IA</button>
+      </div>
+    </div>
+
+    <div class="champ" id="cfg-ia-boite" hidden>
+      <label>Niveau de l'IA</label>
+      <div class="segments" id="cfg-ia">
+        <button class="btn seg actif" type="button" data-niveau="facile">Facile</button>
+        <button class="btn seg" type="button" data-niveau="moyen">Moyen</button>
+        <button class="btn seg" type="button" data-niveau="difficile">Difficile</button>
+      </div>
+      <p class="note" id="cfg-ia-detail"></p>
+    </div>
+
+    <div class="champ">
+      <label for="nom1" id="cfg-label-nom1">Joueur 1</label>
       <input id="nom1" type="text" maxlength="14" value="Joueur 1" autocomplete="off">
     </div>
-    <div class="champ">
+    <div class="champ" id="cfg-nom2-boite">
       <label for="nom2">Joueur 2</label>
       <input id="nom2" type="text" maxlength="14" value="Joueur 2" autocomplete="off">
     </div>
@@ -202,6 +222,10 @@
         <h3>Mon journal <span class="note" id="tour-journal-vide">— aucun tour joué</span></h3>
         <ol id="tour-journal" class="journal"></ol>
       </div>
+      <details class="bloc" id="tour-ia-boite" hidden>
+        <summary>Ce qu'a fait l'IA</summary>
+        <ol id="tour-ia-journal" class="journal ia-journal"></ol>
+      </details>
       <details class="bloc">
         <summary>Mode de l'étoile</summary>
         <div id="tour-mode-etoile" class="formes-liste"></div>
@@ -216,6 +240,19 @@
         <div class="plateau-boite"><div id="tour-magrille" class="plateau petit"></div></div>
       </details>
     </aside>
+  </div>
+</section>
+
+<!-- ══════════════════════════ TOUR DE L'IA ══════════════════════════ -->
+<section id="ecran-ia" class="ecran" hidden>
+  <div class="carte large">
+    <h2 id="ia-titre">🤖 Tour de l'IA</h2>
+    <p class="note" id="ia-sous-titre"></p>
+    <div id="ia-reflexion" class="reflexion"><span class="points"><i></i><i></i><i></i></span> Elle réfléchit…</div>
+    <ol id="ia-actions" class="journal ia-journal"></ol>
+    <div class="plateau-boite"><div id="ia-plateau" class="plateau petit"></div></div>
+    <p class="note">Ce sont tes formes qu'elle sonde : voici où ses lasers sont entrés et ressortis.</p>
+    <button class="btn primaire" id="ia-continuer" disabled>À moi de jouer</button>
   </div>
 </section>
 
