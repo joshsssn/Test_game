@@ -4,9 +4,9 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <meta name="color-scheme" content="dark">
-<meta name="description" content="Lasers &amp; Formes — jeu de déduction à 2 joueurs sur un seul appareil, tour par tour.">
-<title>Lasers &amp; Formes</title>
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🔦</text></svg>">
+<meta name="description" content="Bataille Prismatique — jeu de déduction à 2 joueurs sur un seul appareil, tour par tour.">
+<title>Bataille Prismatique</title>
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><text y='26' font-size='26'>🔺</text></svg>">
 <link rel="stylesheet" href="css/style.css">
 </head>
 <body>
@@ -14,7 +14,7 @@
 <!-- ══════════════════════════ MENU ══════════════════════════ -->
 <section id="ecran-menu" class="ecran">
   <div class="carte accueil">
-    <h1>🔦 Lasers <span>&amp;</span> Formes</h1>
+    <h1>Bataille <span>Prismatique</span></h1>
     <p class="chapo">
       Duel de déduction pour 2 joueurs sur un seul appareil.<br>
       Chacun cache ses formes, sonde la grille adverse au laser,
@@ -57,6 +57,15 @@
     <h3>Les formes</h3>
     <div id="regles-formes" class="formes-liste"></div>
 
+    <h3>Les trois modes de l'étoile</h3>
+    <p>Le mode est choisi <strong>à la configuration de la partie</strong> et vaut pour les deux
+      joueurs : ce n'est pas quelque chose à deviner, mais ça change complètement la lecture des
+      couleurs.</p>
+    <div id="regles-modes" class="formes-liste"></div>
+    <p class="note">En mode dominante ou blanche, la couleur d'un tir <strong>dépend du sens</strong>
+      dans lequel on le tire : le trajet reste le même, mais l'ordre des rencontres change le
+      résultat. Retirer depuis la sortie d'un tir précédent peut donc apprendre quelque chose.</p>
+
     <h3>Les couleurs</h3>
     <p>Le laser part <strong>blanc</strong>. Chaque forme traversée ajoute sa teinte au mélange —
       une même forme traversée deux fois ne compte qu'une fois. Les 16 résultats possibles :</p>
@@ -65,11 +74,15 @@
     <h3>Bon à savoir</h3>
     <ul>
       <li>Un laser <strong>ressort toujours</strong> : la propagation est réversible, aucun piège sans issue.</li>
-      <li>Conséquence : si tu tires depuis la sortie d'un tir précédent, tu retombes sur son entrée,
-        avec la même couleur. Aucune information nouvelle — le jeu te prévient avant de gaspiller le tour.</li>
+      <li>Conséquence : si tu tires depuis la sortie d'un tir précédent, tu retombes sur son entrée.
+        En mode d'étoile <strong>simple</strong> la couleur est identique et le tour est gaspillé ;
+        en mode <strong>dominante</strong> ou <strong>blanche</strong> elle peut différer, et ça peut
+        valoir le coup. Le jeu t'avertit dans les deux cas.</li>
       <li>Le triangle, le carré et le losange occupent un <strong>bloc de 2 × 2 cases</strong> :
-        c'est ce qui rend chacune de leurs faces identifiable, et donc le rebond déductible.
-        Un call juste sur l'une des quatre cases révèle le bloc entier, et il ne compte que pour une forme.</li>
+        c'est ce qui rend chacune de leurs faces identifiable, et donc le rebond déductible.</li>
+      <li>Pour annoncer un bloc, il faut <strong>toujours cliquer sa case en bas à gauche</strong>.
+        Viser un autre de ses quatre coins, c'est un call raté — et on ne te dira pas que tu étais
+        à côté. L'étoile, qui ne fait qu'une case, s'annonce sur elle-même.</li>
       <li>L'<strong>étoile</strong> ne fait qu'une case : elle ne dévie rien, il n'y a donc aucune face à distinguer.</li>
       <li>Pour un <strong>triangle</strong>, il faut annoncer la bonne orientation parmi les quatre.</li>
       <li>L'inventaire est <strong>public</strong> : tu sais combien de formes de chaque type tu dois trouver.</li>
@@ -94,12 +107,30 @@
     </div>
 
     <div class="champ">
-      <label>Taille de la grille</label>
-      <div class="segments" id="cfg-taille">
-        <button class="btn seg" type="button" data-taille="6">6 × 6</button>
-        <button class="btn seg actif" type="button" data-taille="8">8 × 8</button>
-        <button class="btn seg" type="button" data-taille="10">10 × 10</button>
+      <label>Dimensions de la grille</label>
+      <div class="dimensions">
+        <label class="dim-champ">Colonnes<input id="cfg-colonnes" type="number" inputmode="numeric" value="8"></label>
+        <span class="dim-croix">×</span>
+        <label class="dim-champ">Lignes<input id="cfg-lignes" type="number" inputmode="numeric" value="8"></label>
       </div>
+      <div class="segments" id="cfg-dim-presets">
+        <button class="btn seg" type="button" data-lignes="6" data-colonnes="6">6 × 6</button>
+        <button class="btn seg" type="button" data-lignes="8" data-colonnes="8">8 × 8</button>
+        <button class="btn seg" type="button" data-lignes="12" data-colonnes="12">12 × 12</button>
+        <button class="btn seg" type="button" data-lignes="20" data-colonnes="20">20 × 20</button>
+        <button class="btn seg" type="button" data-lignes="7" data-colonnes="18">18 × 7</button>
+      </div>
+      <p class="note" id="cfg-dim-resume"></p>
+    </div>
+
+    <div class="champ">
+      <label>Mode de l'étoile (règle commune aux deux joueurs)</label>
+      <div class="segments" id="cfg-etoile">
+        <button class="btn seg actif" type="button" data-mode="simple">✦ Simple</button>
+        <button class="btn seg" type="button" data-mode="dominante">✦ Dominante</button>
+        <button class="btn seg" type="button" data-mode="blanche">✧ Blanche</button>
+      </div>
+      <p class="note" id="cfg-etoile-detail"></p>
     </div>
 
     <div class="champ">
@@ -172,6 +203,10 @@
         <ol id="tour-journal" class="journal"></ol>
       </div>
       <details class="bloc">
+        <summary>Mode de l'étoile</summary>
+        <div id="tour-mode-etoile" class="formes-liste"></div>
+      </details>
+      <details class="bloc">
         <summary>Table des mélanges</summary>
         <div id="tour-melanges" class="melanges"></div>
       </details>
@@ -212,6 +247,14 @@
     <h2>🧪 Laboratoire</h2>
     <p class="note">Mode bac à sable : pose des formes, tire, et regarde le trajet complet du laser.
       Idéal pour apprendre les déviations et les mélanges avant de jouer.</p>
+    <div class="champ">
+      <label>Mode de l'étoile</label>
+      <div class="segments" id="labo-etoile">
+        <button class="btn seg actif" type="button" data-mode="simple">✦ Simple</button>
+        <button class="btn seg" type="button" data-mode="dominante">✦ Dominante</button>
+        <button class="btn seg" type="button" data-mode="blanche">✧ Blanche</button>
+      </div>
+    </div>
     <div id="labo-palette" class="palette"></div>
     <div class="plateau-boite"><div id="labo-plateau" class="plateau"></div></div>
     <div class="resultat" id="labo-resultat">Clique une flèche pour tirer…</div>

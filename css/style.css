@@ -101,6 +101,17 @@ li { margin-bottom: 5px; }
 }
 .champ input[type=text]:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 
+/* Saisie libre des dimensions */
+.dimensions { display: flex; align-items: flex-end; gap: 10px; margin-bottom: 8px; }
+.dim-champ { display: flex; flex-direction: column; gap: 4px; font-size: 12px; color: var(--texte-doux); flex: 1 1 0; }
+.dim-champ input {
+  width: 100%; padding: 10px 12px; font: inherit; text-align: center;
+  background: var(--fond-2); color: var(--texte);
+  border: 1px solid var(--bordure-vive); border-radius: 10px;
+}
+.dim-champ input:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
+.dim-croix { padding-bottom: 12px; color: var(--texte-doux); }
+
 .inventaire { display: flex; flex-direction: column; gap: 8px; }
 .inv-ligne {
   display: flex; align-items: center; gap: 10px;
@@ -114,9 +125,13 @@ li { margin-bottom: 5px; }
 .inv-ligne .btn { padding: 4px 12px; font-size: 17px; line-height: 1; }
 
 /* ═══════════════════════ Plateau ═══════════════════════ */
-.plateau-boite { overflow-x: auto; padding: 2px 0 6px; }
+.plateau-boite { overflow-x: auto; overscroll-behavior-x: contain; padding: 2px 0 6px; }
 .plateau {
-  display: grid; gap: 2px; justify-content: center; margin: 0 auto;
+  display: grid; gap: 2px;
+  /* width:max-content + marges auto : centré quand ça tient, et quand la grille
+     est plus large que l'écran le débordement part uniquement vers la droite,
+     donc reste atteignable au défilement (ce que `justify-content:center` casse). */
+  width: max-content; margin-inline: auto;
   --cell: 44px; --bord: 26px;
 }
 .coin { }
@@ -172,7 +187,8 @@ li { margin-bottom: 5px; }
   width: 5px; height: 5px; border-radius: 50%; background: var(--ko);
 }
 .plateau.petit { --cell: 30px; --bord: 16px; }
-.plateau.petit .case .coord { display: none; }
+.plateau.petit .case .coord,
+.plateau.sans-coord .case .coord { display: none; }
 
 /* faisceau (laboratoire uniquement) */
 .rayon { position: absolute; z-index: 2; pointer-events: none; border-radius: 3px; }
@@ -288,6 +304,7 @@ li { margin-bottom: 5px; }
   background: var(--fond-2); border: 1px solid var(--bordure); border-radius: 10px; padding: 10px 12px;
 }
 .forme-fiche .g { display: flex; gap: 4px; flex-shrink: 0; padding-top: 2px; }
+.forme-fiche.actif { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(56,189,248,.22); }
 .forme-fiche b { display: block; }
 .forme-fiche small { color: var(--texte-doux); }
 

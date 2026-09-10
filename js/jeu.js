@@ -14,15 +14,13 @@ const ech = (s) => String(s).replace(/[&<>"']/g, (c) =>
 const CAP = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const pluriel = (n, mot, pl = mot + 's') => `${n} ${n > 1 ? pl : mot}`;
 
-/** Libellé court d'une variante de forme, orientation comprise. */
-function libelleVariante(type, orientation) {
-  const d = M.FORMES[type];
-  return orientation ? `${d.nom} ${d.glyphes[orientation]}` : d.nom;
-}
+/** Libellé court d'une déclinaison de forme. */
+const libelleVariante = (type, variante) => M.nomForme({ type, variante });
 
 /** Libellé long, pour les lecteurs d'écran et les info-bulles. */
-function libelleLong(type, orientation) {
-  return orientation ? `${M.FORMES[type].nom}, ${M.NOM_COIN[orientation]}` : M.FORMES[type].nom;
+function libelleLong(type, variante) {
+  const detail = M.detailVariante(type, variante);
+  return detail ? `${M.FORMES[type].nom}, ${detail}` : M.FORMES[type].nom;
 }
 
 /** Couleur de texte lisible au-dessus d'un fond donné. */
@@ -63,11 +61,11 @@ const trace = (pts) => pts.map((p) => p.join(',')).join(' ');
 /**
  * SVG d'une pièce, ou du quart de pièce affiché dans une case.
  * @param {string} type  clé de M.FORMES
- * @param {string|null} orientation  coin de l'angle droit, pour le triangle
+ * @param {string|null} variante  coin de l'angle droit, pour le triangle
  * @param {string|null} part  quart affiché ; null = la pièce entière (palettes, légendes)
  */
-function svgForme(type, orientation = null, part = null) {
-  const c = M.CSS_COULEURS[M.FORMES[type].couleur];
+function svgForme(type, variante = null, part = null) {
+  const c = M.CSS_COULEURS[M.couleurDe(type, modeEtoileCourant())];
   const [dy, dx] = part ? M.DECALAGE[part] : [0, 0];
   const vue = part ? `${dx * 100} ${dy * 100} 100 100` : `0 0 ${B} ${B}`;
   const classe = 'svg-forme' + (part ? ' svg-plein' : '');
@@ -84,7 +82,7 @@ function svgForme(type, orientation = null, part = null) {
   let contenu;
   switch (type) {
     case 'triangle': {
-      const t = TRIANGLE[orientation] || TRIANGLE.NW;
+      const t = TRIANGLE[variante] || TRIANGLE.NW;
       contenu = `<polygon points="${trace(t.pts)}" fill="${c}" fill-opacity=".26"/>
         ${t.murs.map(mur).join('')}${miroir(t.hypo)}`;
       break;
@@ -114,11 +112,26 @@ function svgForme(type, orientation = null, part = null) {
   return `<svg class="${classe}" viewBox="${vue}" aria-hidden="true" focusable="false">${contenu}</svg>`;
 }
 
+/** Étoile dessinée aux couleurs d'un mode précis (pour les légendes). */
+function svgEtoileMode(mode) {
+  const c = M.CSS_COULEURS[M.COULEUR_MODE_ETOILE[mode]];
+  return `<svg class="svg-forme" viewBox="0 0 ${B} ${B}" aria-hidden="true" focusable="false">
+    <polygon points="${ETOILE_POINTS}" fill="${c}" fill-opacity=".45"
+      stroke="${c}" stroke-width="9" stroke-linejoin="round"/></svg>`;
+}
+
 /** SVG de la case occupée (chaque case connaît le quart qu'elle représente). */
-const svgDe = (f) => svgForme(f.type, f.orientation ?? null, f.part ?? null);
+const svgDe = (f) => svgForme(f.type, f.variante ?? null, f.part ?? null);
 
 /** Variantes affichables d'un type : [null], ou les quatre orientations du triangle. */
-const variantesDe = (type) => (M.FORMES[type].orientable ? M.COINS : [null]);
+const variantesDe = (type) => M.variantesDe(type);
+
+/** Mode d'étoile en vigueur, selon l'écran affiché. */
+function modeEtoileCourant() {
+  if (ecranCourant === 'labo') return labo.mode;
+  if (ecranCourant === 'config' || ecranCourant === 'regles') return cfgBrouillon.modeEtoile;
+  return S?.cfg.modeEtoile ?? cfgBrouillon.modeEtoile;
+}
 
 /** Pastille colorée + nom de la couleur. */
 function pastille(couleur) {
@@ -126,7 +139,9 @@ function pastille(couleur) {
 }
 
 const ECRANS = ['menu', 'regles', 'config', 'placement', 'passage', 'tour', 'fin', 'labo'];
+let ecranCourant = 'menu';
 function montrer(nom) {
+  ecranCourant = nom;
   for (const e of ECRANS) $('#ecran-' + e).hidden = (e !== nom);
   window.scrollTo(0, 0);
   ajusterTous();
@@ -164,25 +179,29 @@ modale.addEventListener('click', (e) => { if (e.target === modale && fermetureMo
 document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && fermetureModale) fermetureModale(); });
 
 /* ───────────────────────── Construction des plateaux ───────────────────────── */
-const plateauxVisibles = new Map(); // élément -> taille
+const plateauxVisibles = new Map(); // élément -> dimensions {lignes, colonnes}
 const TACTILE = window.matchMedia?.('(pointer: coarse)').matches ?? false;
 
-function ajusterPlateau(el, taille) {
+function ajusterPlateau(el, d) {
   const petit = el.classList.contains('petit');
-  const dispo = Math.min((el.parentElement?.clientWidth || 520) - 4, petit ? 340 : 560);
+  const dispo = Math.min((el.parentElement?.clientWidth || 520) - 4, petit ? 340 : 620);
   // Au doigt, les flèches de bord méritent une cible plus large qu'à la souris.
-  const bord = petit ? 14 : (TACTILE ? (taille > 8 ? 26 : 30) : (taille > 8 ? 22 : 26));
-  const min = petit ? 20 : 28;
+  const large = d.colonnes > 8;
+  const bord = petit ? 14 : (TACTILE ? (large ? 24 : 30) : (large ? 20 : 26));
+  // Sur une grande grille on préfère des cases minuscules à un défilement horizontal.
+  const min = petit ? 12 : 14;
   const max = petit ? 34 : 54;
-  let cell = Math.floor((dispo - 2 * bord - (taille + 1) * 2) / taille);
+  let cell = Math.floor((dispo - 2 * bord - (d.colonnes + 1) * 2) / d.colonnes);
   cell = Math.max(min, Math.min(max, cell));
-  el.style.gridTemplateColumns = `${bord}px repeat(${taille}, ${cell}px) ${bord}px`;
-  el.style.gridTemplateRows    = `${bord}px repeat(${taille}, ${cell}px) ${bord}px`;
+  el.style.gridTemplateColumns = `${bord}px repeat(${d.colonnes}, ${cell}px) ${bord}px`;
+  el.style.gridTemplateRows    = `${bord}px repeat(${d.lignes}, ${cell}px) ${bord}px`;
   el.style.setProperty('--cell', cell + 'px');
   el.style.setProperty('--bord', bord + 'px');
+  // En dessous d'une certaine taille les coordonnées deviennent illisibles.
+  el.classList.toggle('sans-coord', cell < 30);
 }
 function ajusterTous() {
-  for (const [el, taille] of plateauxVisibles) if (el.offsetParent !== null) ajusterPlateau(el, taille);
+  for (const [el, d] of plateauxVisibles) if (el.offsetParent !== null) ajusterPlateau(el, d);
 }
 window.addEventListener('resize', ajusterTous);
 window.addEventListener('orientationchange', () => setTimeout(ajusterTous, 120));
@@ -191,18 +210,18 @@ for (const d of $$('details.bloc')) d.addEventListener('toggle', ajusterTous);
 const SYMBOLES = { haut: '▼', bas: '▲', gauche: '▶', droite: '◀' };
 
 /**
- * Construit un plateau taille×taille entouré de ses boutons de bord.
+ * Construit un plateau de d.lignes × d.colonnes, entouré de ses boutons de bord.
  * @returns {{cases: HTMLElement[][], bords: Object}}
  */
-function construirePlateau(el, taille, { surCase = null, surBord = null, coords = true } = {}) {
+function construirePlateau(el, d, { surCase = null, surBord = null, coords = true } = {}) {
   el.innerHTML = '';
   const cases = [];
   const bords = { haut: [], bas: [], gauche: [], droite: [] };
 
-  for (let gr = 0; gr <= taille + 1; gr++) {
-    for (let gc = 0; gc <= taille + 1; gc++) {
-      const surBordR = gr === 0 || gr === taille + 1;
-      const surBordC = gc === 0 || gc === taille + 1;
+  for (let gr = 0; gr <= d.lignes + 1; gr++) {
+    for (let gc = 0; gc <= d.colonnes + 1; gc++) {
+      const surBordR = gr === 0 || gr === d.lignes + 1;
+      const surBordC = gc === 0 || gc === d.colonnes + 1;
 
       if (surBordR && surBordC) {
         const coin = document.createElement('div');
@@ -214,7 +233,7 @@ function construirePlateau(el, taille, { surCase = null, surBord = null, coords 
       if (surBordR || surBordC) {
         let cote, index;
         if (gr === 0) { cote = 'haut'; index = gc; }
-        else if (gr === taille + 1) { cote = 'bas'; index = gc; }
+        else if (gr === d.lignes + 1) { cote = 'bas'; index = gc; }
         else if (gc === 0) { cote = 'gauche'; index = gr; }
         else { cote = 'droite'; index = gr; }
 
@@ -246,14 +265,14 @@ function construirePlateau(el, taille, { surCase = null, surBord = null, coords 
     }
   }
 
-  plateauxVisibles.set(el, taille);
-  ajusterPlateau(el, taille);
+  plateauxVisibles.set(el, d);
+  ajusterPlateau(el, d);
   return { cases, bords };
 }
 
 /** Peint les formes d'une grille sur un plateau construit. */
-function peindreFormes(cases, taille, grille) {
-  for (let r = 0; r < taille; r++) for (let c = 0; c < taille; c++) {
+function peindreFormes(cases, d, grille) {
+  for (let r = 0; r < d.lignes; r++) for (let c = 0; c < d.colonnes; c++) {
     const span = $('.forme', cases[r][c]);
     const f = grille.get(M.cle(r, c));
     span.innerHTML = f ? svgDe(f) : '';
@@ -281,10 +300,23 @@ const DESCRIPTIONS = {
     + 'propre case : on sait donc toujours laquelle a été touchée. Le laser rebondit à 90° et ne '
     + 'traverse jamais.',
   etoile:   '<strong>Une seule case</strong> — elle ne dévie rien, il n\'y a aucune face à identifier. '
-    + 'Le laser la <strong>traverse tout droit</strong> et en ressort teinté de magenta, une couleur '
-    + 'qu\'aucune autre forme ne produit. C\'est le piège du jeu : le magenta prouve qu\'une étoile est '
-    + 'sur la trajectoire, sans rien dire de l\'endroit.'
+    + 'Le laser la <strong>traverse tout droit</strong> et n\'en ressort que recoloré. Son effet exact '
+    + 'dépend du <strong>mode choisi à la configuration</strong>, le même pour les deux joueurs.'
 };
+
+/** Fiche des trois modes d'étoile, avec un exemple pour chacun. */
+const EXEMPLES_MODE = {
+  simple:    'bleu → étoile → rouge donne <strong>bleu + magenta + rouge</strong>.',
+  dominante: 'bleu → étoile → rouge donne <strong>magenta + rouge</strong> : le bleu est perdu.',
+  blanche:   'bleu → étoile → rouge donne <strong>blanc</strong> : plus rien ne recolore le laser.'
+};
+
+function htmlModesEtoile(actif = null) {
+  return M.MODES_ETOILE.map((mode) => `<div class="forme-fiche${mode === actif ? ' actif' : ''}">
+    <span class="g">${svgEtoileMode(mode)}</span>
+    <span><b>Étoile ${mode}</b><small>${CAP(M.NOM_MODE_ETOILE[mode])}. ${EXEMPLES_MODE[mode]}</small></span>
+  </div>`).join('');
+}
 
 function htmlFiches() {
   const legende = `<p class="note">Le trait dit ce que fait la face :
@@ -300,8 +332,13 @@ function htmlFiches() {
 }
 
 /* ═════════════════════════ ÉTAT DE LA PARTIE ═════════════════════════ */
-const DEFAUT = { taille: 8, counts: { triangle: 2, carre: 1, losange: 1, etoile: 1 } };
-let cfgBrouillon = { taille: DEFAUT.taille, counts: { ...DEFAUT.counts } };
+const DEFAUT = {
+  lignes: 8, colonnes: 8,
+  modeEtoile: M.MODE_ETOILE_DEFAUT,
+  counts: { triangle: 2, carre: 1, losange: 1, etoile: 1 }
+};
+let cfgBrouillon = { ...DEFAUT, counts: { ...DEFAUT.counts } };
+const dimBrouillon = () => M.dim(cfgBrouillon.lignes, cfgBrouillon.colonnes);
 let S = null;
 
 function creerJoueur(nom) {
@@ -311,6 +348,7 @@ function creerJoueur(nom) {
     trouve: new Map(),   // formes de l'adversaire qu'il a correctement annoncées
     rates: new Set(),    // cases où il a raté un call (mémo privé)
     marques: {},         // 'cote:index' -> { n, couleur }
+    tires: [],           // bords déjà utilisés comme ENTRÉE, 'cote:index'
     journal: [],         // toutes ses actions
     recap: null,         // actions de son tour précédent
     nbTirs: 0
@@ -319,7 +357,12 @@ function creerJoueur(nom) {
 
 function nouvellePartie(cfg) {
   S = {
-    cfg: { taille: cfg.taille, counts: { ...cfg.counts }, noms: [...cfg.noms] },
+    cfg: {
+      dim: M.dim(cfg.lignes, cfg.colonnes),
+      modeEtoile: cfg.modeEtoile,
+      counts: { ...cfg.counts },
+      noms: [...cfg.noms]
+    },
     total: M.totalPieces(cfg.counts),
     joueurs: cfg.noms.map(creerJoueur),
     courant: 0,
@@ -342,19 +385,19 @@ const nbTrouve = (joueur) => new Set([...joueur.trouve.values()].map((v) => v.id
    Une partie se joue sur un seul appareil, souvent un téléphone : verrouillage
    de l'écran, appel entrant ou onglet rechargé ne doivent pas faire perdre la
    partie. On sérialise l'état complet après chaque action. */
-const CLE_SAUVEGARDE = 'lasers-formes/partie/v2';
+const CLE_SAUVEGARDE = 'bataille-prismatique/partie/v3';
 
 function sauver() {
   if (!S) return;
   try {
     localStorage.setItem(CLE_SAUVEGARDE, JSON.stringify({
-      v: 2,
+      v: 3,
       cfg: S.cfg, total: S.total, courant: S.courant, agit: S.agit,
       numeroTour: S.numeroTour, phase: S.phase, placementIndex: S.placementIndex,
       passage: S.passage, actionsTour: S.actionsTour, resultat: S.resultat,
       joueurs: S.joueurs.map((j) => ({
         nom: j.nom, grille: [...j.grille], trouve: [...j.trouve], rates: [...j.rates],
-        marques: j.marques, journal: j.journal, recap: j.recap, nbTirs: j.nbTirs
+        marques: j.marques, tires: j.tires, journal: j.journal, recap: j.recap, nbTirs: j.nbTirs
       }))
     }));
   } catch { /* mode privé ou quota plein : on joue sans filet */ }
@@ -369,7 +412,7 @@ function lireSauvegarde() {
     const brut = localStorage.getItem(CLE_SAUVEGARDE);
     if (!brut) return null;
     const d = JSON.parse(brut);
-    return (d && d.v === 2 && Array.isArray(d.joueurs) && d.joueurs.length === 2) ? d : null;
+    return (d && d.v === 3 && Array.isArray(d.joueurs) && d.joueurs.length === 2) ? d : null;
   } catch { return null; }
 }
 
@@ -386,6 +429,7 @@ function reprendrePartie() {
       trouve: new Map(j.trouve),
       rates: new Set(j.rates),
       marques: j.marques || {},
+      tires: j.tires || [],
       journal: j.journal || [],
       recap: j.recap || null,
       nbTirs: j.nbTirs || 0
@@ -424,6 +468,7 @@ $('#menu-jouer').addEventListener('click', () => {
 $('#menu-reprendre').addEventListener('click', () => { if (!reprendrePartie()) majBoutonReprendre(); });
 $('#menu-regles').addEventListener('click', () => {
   $('#regles-formes').innerHTML = htmlFiches();
+  $('#regles-modes').innerHTML = htmlModesEtoile();
   $('#regles-melanges').innerHTML = htmlMelanges();
   montrer('regles');
 });
@@ -439,13 +484,24 @@ function ouvrirConfig() {
 }
 
 function rendreConfig() {
-  for (const b of $$('#cfg-taille .seg')) b.classList.toggle('actif', +b.dataset.taille === cfgBrouillon.taille);
+  $('#cfg-lignes').value = cfgBrouillon.lignes;
+  $('#cfg-colonnes').value = cfgBrouillon.colonnes;
+  $('#cfg-dim-resume').textContent =
+    `${cfgBrouillon.colonnes} colonnes (A → ${'ABCDEFGHIJKLMNOPQRSTUVWXYZ'[cfgBrouillon.colonnes - 1]}) `
+    + `× ${cfgBrouillon.lignes} lignes (1 → ${cfgBrouillon.lignes})`;
+
+  for (const b of $$('#cfg-etoile .seg')) b.classList.toggle('actif', b.dataset.mode === cfgBrouillon.modeEtoile);
+  $('#cfg-etoile-detail').innerHTML =
+    `<strong>Étoile ${cfgBrouillon.modeEtoile}</strong> — ${M.NOM_MODE_ETOILE[cfgBrouillon.modeEtoile]}.`
+    + (cfgBrouillon.modeEtoile === 'simple' ? ''
+      : ' Attention : dans ce mode, la couleur d\'un tir dépend du sens dans lequel on le tire.');
 
   $('#cfg-inventaire').innerHTML = M.ORDRE_FORMES.map((type) => {
     const d = M.FORMES[type];
     return `<div class="inv-ligne">
-      <span class="inv-glyphe">${svgForme(type, d.orientable ? M.COINS[0] : null)}</span>
-      <span class="inv-nom">${d.nom}<small>teinte ${d.couleur} · ${M.emprise(type) > 1 ? 'bloc 2 × 2' : '1 case'}</small></span>
+      <span class="inv-glyphe">${svgForme(type, variantesDe(type)[0])}</span>
+      <span class="inv-nom">${d.nom}<small>teinte ${M.couleurDe(type, cfgBrouillon.modeEtoile)} · ${
+        M.emprise(type) > 1 ? 'bloc 2 × 2' : '1 case'}</small></span>
       <button class="btn" type="button" data-inv="${type}" data-pas="-1" aria-label="Moins de ${d.nom}">−</button>
       <span class="inv-compteur" id="inv-${type}">${cfgBrouillon.counts[type]}</span>
       <button class="btn" type="button" data-inv="${type}" data-pas="1" aria-label="Plus de ${d.nom}">+</button>
@@ -463,35 +519,67 @@ function rendreConfig() {
   const total = M.totalPieces(cfgBrouillon.counts);
   const cases = M.cellulesRequises(cfgBrouillon.counts);
   const plafond = plafondCases();
-  const trop = cases > plafond;
-  $('#cfg-total').innerHTML = total === 0
-    ? '<span class="avert">Il faut au moins une forme par joueur.</span>'
-    : trop
-      ? `<span class="avert">${cases} cases occupées : c'est trop pour une grille
-         ${cfgBrouillon.taille}×${cfgBrouillon.taille} (maximum ${plafond}). Chaque bloc en occupe 4.</span>`
-      : `<strong>${pluriel(total, 'forme')}</strong> à cacher (${cases} cases sur ${plafond} disponibles)
-         — et donc <strong>${pluriel(total, 'call')}</strong> à réussir pour gagner.`;
-  $('#cfg-lancer').disabled = total === 0 || trop;
+  const blocsPossibles = Math.max(0, Math.floor(cfgBrouillon.lignes / 2) * Math.floor(cfgBrouillon.colonnes / 2));
+  const blocs = M.ORDRE_FORMES.filter((t) => M.FORMES[t].bloc).reduce((n, t) => n + cfgBrouillon.counts[t], 0);
+
+  let alerte = '';
+  if (total === 0) alerte = 'Il faut au moins une forme par joueur.';
+  else if (cases > plafond) alerte = `${cases} cases occupées : c'est trop pour une grille `
+    + `${cfgBrouillon.colonnes}×${cfgBrouillon.lignes} (maximum ${plafond}). Chaque bloc en occupe 4.`;
+  else if (blocs > blocsPossibles) alerte = `${blocs} blocs de 2 × 2 ne rentrent pas dans une grille `
+    + `${cfgBrouillon.colonnes}×${cfgBrouillon.lignes}.`;
+
+  $('#cfg-total').innerHTML = alerte
+    ? `<span class="avert">${alerte}</span>`
+    : `<strong>${pluriel(total, 'forme')}</strong> à cacher (${cases} cases sur ${plafond} disponibles)
+       — et donc <strong>${pluriel(total, 'call')}</strong> à réussir pour gagner.`;
+  $('#cfg-lancer').disabled = !!alerte;
 }
 
 /** Le plateau doit rester majoritairement vide pour que la déduction ait du sens. */
-const plafondCases = () => Math.floor(cfgBrouillon.taille * cfgBrouillon.taille * 0.45);
+const plafondCases = () => Math.floor(cfgBrouillon.lignes * cfgBrouillon.colonnes * 0.45);
 
 /** Combien de pièces de ce type peut-on encore ajouter sans dépasser le plafond ? */
 function maxParForme(type) {
   const autres = M.cellulesRequises({ ...cfgBrouillon.counts, [type]: 0 });
-  return Math.min(12, Math.floor((plafondCases() - autres) / M.emprise(type)));
+  return Math.min(20, Math.floor((plafondCases() - autres) / M.emprise(type)));
 }
 
-for (const b of $$('#cfg-taille .seg')) {
+/** Ramène l'inventaire dans les clous après un changement de dimensions. */
+function rognerInventaire() {
+  for (const type of [...M.ORDRE_FORMES].reverse()) {
+    cfgBrouillon.counts[type] = Math.max(0, Math.min(cfgBrouillon.counts[type], maxParForme(type)));
+  }
+}
+
+const MIN_COTE = 4;
+
+for (const champ of ['lignes', 'colonnes']) {
+  const input = $('#cfg-' + champ);
+  const max = champ === 'colonnes' ? M.MAX_COLONNES : 40;
+  input.min = MIN_COTE;
+  input.max = max;
+  const appliquer = () => {
+    const v = parseInt(input.value, 10);
+    cfgBrouillon[champ] = Number.isFinite(v) ? Math.max(MIN_COTE, Math.min(max, v)) : DEFAUT[champ];
+    rognerInventaire();
+    rendreConfig();
+  };
+  input.addEventListener('change', appliquer);
+  input.addEventListener('blur', appliquer);
+}
+
+for (const b of $$('#cfg-dim-presets .seg')) {
   b.addEventListener('click', () => {
-    cfgBrouillon.taille = +b.dataset.taille;
-    // Réduire la grille peut rendre l'inventaire trop encombrant : on le rogne.
-    for (const type of [...M.ORDRE_FORMES].reverse()) {
-      cfgBrouillon.counts[type] = Math.max(0, Math.min(cfgBrouillon.counts[type], maxParForme(type)));
-    }
+    cfgBrouillon.lignes = +b.dataset.lignes;
+    cfgBrouillon.colonnes = +b.dataset.colonnes;
+    rognerInventaire();
     rendreConfig();
   });
+}
+
+for (const b of $$('#cfg-etoile .seg')) {
+  b.addEventListener('click', () => { cfgBrouillon.modeEtoile = b.dataset.mode; rendreConfig(); });
 }
 
 $('#cfg-lancer').addEventListener('click', () => {
@@ -514,7 +602,7 @@ function lancerPlacement(indexJoueur) {
   sauver();
 
   $('#place-titre').textContent = `${joueur.nom} — place tes formes`;
-  placement.plateau = construirePlateau($('#place-plateau'), S.cfg.taille, { surCase: clicPlacement });
+  placement.plateau = construirePlateau($('#place-plateau'), S.cfg.dim, { surCase: clicPlacement });
   choisirOutilDisponible();
   rendrePlacement();
   montrer('placement');
@@ -531,7 +619,7 @@ function choisirOutilDisponible() {
   const reste = stockRestant();
   for (const type of M.ORDRE_FORMES) {
     if (reste[type] > 0) {
-      placement.outil = M.FORMES[type].orientable ? { type, orientation: M.COINS[0] } : { type };
+      placement.outil = { type, variante: variantesDe(type)[0] };
       return;
     }
   }
@@ -545,19 +633,19 @@ function clicPlacement(r, c) {
 
   if (presente) {
     // Retaper un triangle avec l'outil triangle le fait pivoter d'un quart de tour ;
-    // n'importe quel autre clic retire la pièce entière (les 4 cases d'un losange).
-    if (outil && outil.type === 'triangle' && presente.type === 'triangle') {
-      const coin = (presente.orientation === outil.orientation)
-        ? M.pivoterTriangle(grille, r, c)
-        : M.orienterTriangle(grille, r, c, outil.orientation);
-      placement.outil = { type: 'triangle', orientation: coin };
+    // n'importe quel autre clic retire la pièce entière (les 4 cases d'un bloc).
+    if (outil && outil.type === presente.type && M.FORMES[presente.type].variantes) {
+      const v = (presente.variante === outil.variante)
+        ? M.varianteSuivante(grille, r, c)
+        : M.changerVariante(grille, r, c, outil.variante);
+      placement.outil = { type: presente.type, variante: v };
     } else {
       M.retirerPiece(grille, r, c);
     }
   } else if (outil && stockRestant()[outil.type] > 0) {
-    // Un losange posé près d'un bord se recale pour tenir entièrement dans la grille.
-    const [ar, ac] = M.ancreValide(outil.type, S.cfg.taille, r, c);
-    const pose = M.poserPiece(grille, S.cfg.taille, outil.type, ar, ac, outil.orientation ?? null);
+    // Un bloc posé près d'un bord se recale pour tenir entièrement dans la grille.
+    const [ar, ac] = M.ancreValide(outil.type, S.cfg.dim, r, c);
+    const pose = M.poserPiece(grille, S.cfg.dim, outil.type, ar, ac, outil.variante ?? null);
     if (!pose) {
       $('#place-etat').innerHTML =
         `<span class="avert">Pas la place ici : ${M.FORMES[outil.type].nom.toLowerCase()} occupe un bloc de 2 × 2 cases libres.</span>`;
@@ -576,9 +664,9 @@ function rendrePlacement() {
   const boutons = [];
   for (const type of M.ORDRE_FORMES) {
     for (const o of variantesDe(type)) {
-      const actif = outil && outil.type === type && (o === null || outil.orientation === o);
+      const actif = outil && outil.type === type && (o === null || outil.variante === o);
       boutons.push(`<button class="pal-btn ${actif ? 'actif' : ''} ${reste[type] <= 0 ? 'epuise' : ''}"
-        type="button" data-type="${type}" ${o ? `data-orientation="${o}"` : ''}
+        type="button" data-type="${type}" ${o ? `data-variante="${o}"` : ''}
         aria-label="${libelleLong(type, o)}" title="${libelleLong(type, o)}">
         <span class="pal-glyphe">${svgForme(type, o)}</span>
         <span class="pal-reste">${reste[type]} / ${S.cfg.counts[type]}</span></button>`);
@@ -587,14 +675,12 @@ function rendrePlacement() {
   $('#place-palette').innerHTML = boutons.join('');
   for (const b of $$('#place-palette .pal-btn')) {
     b.addEventListener('click', () => {
-      const type = b.dataset.type;
-      placement.outil = M.FORMES[type].orientable
-        ? { type, orientation: b.dataset.orientation } : { type };
+      placement.outil = { type: b.dataset.type, variante: b.dataset.variante ?? null };
       rendrePlacement();
     });
   }
 
-  peindreFormes(placement.plateau.cases, S.cfg.taille, joueur.grille);
+  peindreFormes(placement.plateau.cases, S.cfg.dim, joueur.grille);
 
   const pose = M.compterPieces(joueur.grille);
   const total = S.total;
@@ -606,7 +692,7 @@ function rendrePlacement() {
 
 $('#place-alea').addEventListener('click', () => {
   const j = S.joueurs[placement.i];
-  j.grille = M.placementAleatoire(S.cfg.taille, S.cfg.counts);
+  j.grille = M.placementAleatoire(S.cfg.dim, S.cfg.counts);
   choisirOutilDisponible();
   rendrePlacement();
 });
@@ -670,17 +756,18 @@ function rendreTour() {
   $('#tour-titre').textContent = `Tour de ${joueur.nom}`;
   majScore();
 
-  plateauTour = construirePlateau($('#tour-plateau'), S.cfg.taille, {
+  plateauTour = construirePlateau($('#tour-plateau'), S.cfg.dim, {
     surCase: clicCall,
     surBord: clicTir
   });
 
   // Grille personnelle, consultable à la demande.
   $('#tour-magrille-boite').open = false;
-  const perso = construirePlateau($('#tour-magrille'), S.cfg.taille, {});
-  peindreFormes(perso.cases, S.cfg.taille, joueur.grille);
+  const perso = construirePlateau($('#tour-magrille'), S.cfg.dim, {});
+  peindreFormes(perso.cases, S.cfg.dim, joueur.grille);
 
   $('#tour-melanges').innerHTML = htmlMelanges();
+  $('#tour-mode-etoile').innerHTML = htmlModesEtoile(S.cfg.modeEtoile);
   $('#tour-resultat').hidden = true;
   $('#tour-consigne').innerHTML =
     'Clique une <strong>flèche</strong> pour tirer un laser, ou une <strong>case</strong> pour faire un call.';
@@ -750,7 +837,7 @@ function rendreRestant(joueur) {
     const d = M.FORMES[t];
     const reste = S.cfg.counts[t] - (trouvesParType[t] || 0);
     return `<span class="restant-item ${reste === 0 ? 'fini' : ''}">
-      <span class="g">${svgForme(t, d.orientable ? M.COINS[0] : null)}</span>${d.nom} × ${reste}</span>`;
+      <span class="g">${svgForme(t, variantesDe(t)[0])}</span>${d.nom} × ${reste}</span>`;
   }).join('');
 }
 
@@ -779,21 +866,31 @@ function surlignerTir(joueur, n, li) {
 function clicTir(cote, index) {
   if (S.agit) return;
   const joueur = S.joueurs[S.courant];
-  const dejaVu = joueur.marques[`${cote}:${index}`];
-  if (dejaVu) {
-    ouvrirModale({
-      titre: 'Bord déjà connu',
-      corps: `<p>Ce bord porte déjà la marque du tir n°${dejaVu.n} (${pastille(dejaVu.couleur)}).
-        Un laser étant réversible, tirer ici te redonnera exactement la même information.</p>
-        <p class="avert">Tu perdrais ton tour pour rien.</p>`,
-      actions: [
-        { texte: 'Annuler', onClic: fermerModale },
-        { texte: 'Tirer quand même', classe: 'danger', onClic: () => { fermerModale(); executerTir(cote, index); } }
-      ]
-    });
-    return;
-  }
-  executerTir(cote, index);
+  const k = `${cote}:${index}`;
+  const dejaVu = joueur.marques[k];
+  if (!dejaVu) { executerTir(cote, index); return; }
+
+  const dejaTire = joueur.tires.includes(k);
+  const couleurSymetrique = S.cfg.modeEtoile === 'simple';
+  ouvrirModale({
+    titre: 'Bord déjà connu',
+    corps: dejaTire
+      ? `<p>Tu as déjà tiré depuis ce bord (tir n°${dejaVu.n}, ${pastille(dejaVu.couleur)}).
+         Le résultat sera identique.</p><p class="avert">Tu perdrais ton tour pour rien.</p>`
+      : couleurSymetrique
+        ? `<p>Ce bord est la sortie du tir n°${dejaVu.n} (${pastille(dejaVu.couleur)}). Le trajet étant
+           réversible et la partie se jouant en étoile <strong>simple</strong>, tu retomberas sur son
+           entrée avec la même couleur.</p><p class="avert">Tu perdrais ton tour pour rien.</p>`
+        : `<p>Ce bord est la sortie du tir n°${dejaVu.n} (${pastille(dejaVu.couleur)}). Le trajet sera le
+           même à l'envers, mais la partie se joue en étoile <strong>${S.cfg.modeEtoile}</strong> :
+           la couleur, elle, peut être différente dans ce sens.</p>
+           <p class="note">Ça peut donc valoir le tour.</p>`,
+    actions: [
+      { texte: 'Annuler', onClic: fermerModale },
+      { texte: 'Tirer quand même', classe: dejaTire ? 'danger' : 'primaire',
+        onClic: () => { fermerModale(); executerTir(cote, index); } }
+    ]
+  });
 }
 
 function executerTir(cote, index) {
@@ -802,7 +899,7 @@ function executerTir(cote, index) {
   S.agit = true;
   verrouillerPlateau();
 
-  const res = M.tirer(cible.grille, S.cfg.taille, cote, index);
+  const res = M.tirer(cible.grille, S.cfg.dim, cote, index, S.cfg.modeEtoile);
   const n = ++joueur.nbTirs;
 
   const entree = plateauTour.bords[cote][index];
@@ -814,6 +911,7 @@ function executerTir(cote, index) {
     if (res.statut === 'sorti') {
       joueur.marques[`${cote}:${index}`] = { n, couleur: res.couleur };
       joueur.marques[`${res.coteSortie}:${res.indexSortie}`] = { n, couleur: res.couleur };
+      joueur.tires.push(`${cote}:${index}`);
       resume = res.retour
         ? `<strong>Tir n°${n}</strong> — ${CAP(cote)} ${index} → <em>retour à l'entrée</em> ${pastille(res.couleur)}`
         : `<strong>Tir n°${n}</strong> — ${CAP(cote)} ${index} → ${CAP(res.coteSortie)} ${res.indexSortie} ${pastille(res.couleur)}`;
@@ -852,16 +950,38 @@ function clicCall(r, c) {
     return;
   }
 
+  // Un bloc s'annonce par son coin inférieur gauche : il s'étend donc vers le
+  // haut et vers la droite. Près du bord haut ou du bord droit, aucun bloc ne
+  // peut avoir son coin ici — seule l'étoile reste possible.
+  const blocPossible = r >= 1 && c <= S.cfg.dim.colonnes - 2;
+  const proposables = M.ORDRE_FORMES.filter(
+    (t) => S.cfg.counts[t] > 0 && (blocPossible || !M.FORMES[t].bloc));
+
+  if (!proposables.length) {
+    ouvrirModale({
+      titre: M.nomCase(r, c),
+      corps: `<p>Aucune forme de cette partie ne peut avoir sa case en bas à gauche ici :
+        un bloc de 2 × 2 s'étend vers le haut et vers la droite.</p>`,
+      actions: [{ texte: 'Fermer', classe: 'primaire', onClic: fermerModale }]
+    });
+    return;
+  }
+
   let choix = null;
   const corps = document.createElement('div');
-  corps.innerHTML = `<p>Annonce la forme que tu penses trouver en <strong>${M.nomCase(r, c)}</strong>
-    sur la grille de ${ech(adversaireDe(S.courant).nom)}.</p><div class="choix-formes"></div>
+  const etendue = blocPossible
+    ? `Un bloc de 2 × 2 s'annonce toujours par son coin inférieur gauche : ici, il couvrirait
+       ${M.nomCase(r, c)}, ${M.nomCase(r, c + 1)}, ${M.nomCase(r - 1, c)} et ${M.nomCase(r - 1, c + 1)}.`
+    : 'Trop près du bord pour qu\'un bloc de 2 × 2 ait son coin ici : seule l\'étoile est possible.';
+  corps.innerHTML = `<p>Annonce la forme dont <strong>${M.nomCase(r, c)}</strong> est la
+    <strong>case en bas à gauche</strong>, sur la grille de ${ech(adversaireDe(S.courant).nom)}.</p>
+    <p class="note">${etendue}</p>
+    <div class="choix-formes"></div>
     <p class="avert">Si tu as raison, la forme est révélée et tu rejoues.
     Si tu te trompes, tu ne sauras rien de plus et le tour passe à l'adversaire.</p>`;
 
   const zone = $('.choix-formes', corps);
-  for (const type of M.ORDRE_FORMES) {
-    if (S.cfg.counts[type] === 0) continue;
+  for (const type of proposables) {
     for (const o of variantesDe(type)) {
       const b = document.createElement('button');
       b.type = 'button';
@@ -871,7 +991,7 @@ function clicCall(r, c) {
       b.setAttribute('aria-label', libelleLong(type, o));
       b.title = libelleLong(type, o);
       b.addEventListener('click', () => {
-        choix = o ? { type, orientation: o } : { type };
+        choix = { type, variante: o };
         for (const autre of $$('.pal-btn', zone)) autre.classList.remove('actif');
         b.classList.add('actif');
         $('#modale-confirmer').disabled = false;
@@ -896,7 +1016,8 @@ function executerCall(r, c, forme) {
   const cible = adversaireDe(S.courant);
   const k = M.cle(r, c);
   const reelle = cible.grille.get(k);
-  const juste = M.memeForme(reelle, forme);
+  // Un bloc ne se laisse annoncer que sur son quart en bas à gauche.
+  const juste = !!reelle && M.estCaseDeCall(reelle) && M.memeForme(reelle, forme);
   const nom = M.nomCase(r, c);
 
   if (juste) {
@@ -936,8 +1057,10 @@ function executerCall(r, c, forme) {
   rendreJournal(joueur);
 
   afficherResultat(
-    `<h3>❌ Call raté</h3><p><strong>${nom}</strong> ne contient pas ${M.nomForme(forme)}.
-     C'est la seule chose que tu apprends : ni la forme réelle, ni si la case est vide.</p>
+    `<h3>❌ Call raté</h3><p><strong>${nom}</strong> n'est pas la case en bas à gauche
+     d'${M.nomForme(forme).toLowerCase().startsWith('é') ? 'une' : 'un'} ${M.nomForme(forme)}.</p>
+     <p>C'est tout ce que tu apprends : on ne te dira ni quelle forme s'y trouve, ni si la case est
+     vide, ni si tu as visé le mauvais coin d'un bloc.</p>
      <p class="note">Et tu n'as pas tiré ce tour-ci : aucune information nouvelle sur la grille.</p>`,
     'ko', 'Terminer le tour — passer l\'appareil', 'fin');
 }
@@ -1022,24 +1145,30 @@ function terminerPartie(gagnant) {
 
   $('#fin-nom1').textContent = `Grille de ${S.joueurs[0].nom}`;
   $('#fin-nom2').textContent = `Grille de ${S.joueurs[1].nom}`;
-  const p1 = construirePlateau($('#fin-plateau1'), S.cfg.taille, {});
-  const p2 = construirePlateau($('#fin-plateau2'), S.cfg.taille, {});
-  peindreFormes(p1.cases, S.cfg.taille, S.joueurs[0].grille);
-  peindreFormes(p2.cases, S.cfg.taille, S.joueurs[1].grille);
+  const p1 = construirePlateau($('#fin-plateau1'), S.cfg.dim, {});
+  const p2 = construirePlateau($('#fin-plateau2'), S.cfg.dim, {});
+  peindreFormes(p1.cases, S.cfg.dim, S.joueurs[0].grille);
+  peindreFormes(p2.cases, S.cfg.dim, S.joueurs[1].grille);
   montrer('fin');
 }
 
 $('#fin-rejouer').addEventListener('click', () => {
   effacerSauvegarde();
-  nouvellePartie({ taille: S.cfg.taille, counts: S.cfg.counts, noms: S.cfg.noms });
+  nouvellePartie({
+    lignes: S.cfg.dim.lignes, colonnes: S.cfg.dim.colonnes,
+    modeEtoile: S.cfg.modeEtoile, counts: S.cfg.counts, noms: S.cfg.noms
+  });
   lancerPlacement(0);
 });
 
 /* ═════════════════════════ LABORATOIRE (bac à sable solo) ═════════════════════════ */
-const labo = { taille: 8, grille: new Map(), outil: { type: 'triangle', orientation: '\\' }, plateau: null, minuteurs: [], n: 0 };
+const labo = {
+  dim: M.dim(8), mode: M.MODE_ETOILE_DEFAUT, grille: new Map(),
+  outil: { type: 'triangle', variante: M.COINS[0] }, plateau: null, minuteurs: [], n: 0
+};
 
 function ouvrirLabo() {
-  labo.plateau = construirePlateau($('#labo-plateau'), labo.taille, { surCase: clicLabo, surBord: tirLabo });
+  labo.plateau = construirePlateau($('#labo-plateau'), labo.dim, { surCase: clicLabo, surBord: tirLabo });
   $('#labo-melanges').innerHTML = htmlMelanges();
   rendreLabo();
   montrer('labo');
@@ -1048,16 +1177,18 @@ function ouvrirLabo() {
 function clicLabo(r, c) {
   effacerRayons();
   const presente = labo.grille.get(M.cle(r, c));
-  if (labo.outil === 'gomme' || (presente && !(presente.type === 'triangle' && labo.outil.type === 'triangle'))) {
+  const memeTypeOrientable = presente && labo.outil !== 'gomme'
+    && presente.type === labo.outil.type && M.FORMES[presente.type].variantes;
+  if (labo.outil === 'gomme' || (presente && !memeTypeOrientable)) {
     M.retirerPiece(labo.grille, r, c);
   } else if (presente) {
-    const coin = (presente.orientation === labo.outil.orientation)
-      ? M.pivoterTriangle(labo.grille, r, c)
-      : M.orienterTriangle(labo.grille, r, c, labo.outil.orientation);
-    labo.outil = { type: 'triangle', orientation: coin };
+    const v = (presente.variante === labo.outil.variante)
+      ? M.varianteSuivante(labo.grille, r, c)
+      : M.changerVariante(labo.grille, r, c, labo.outil.variante);
+    labo.outil = { type: presente.type, variante: v };
   } else {
-    const [ar, ac] = M.ancreValide(labo.outil.type, labo.taille, r, c);
-    M.poserPiece(labo.grille, labo.taille, labo.outil.type, ar, ac, labo.outil.orientation ?? null);
+    const [ar, ac] = M.ancreValide(labo.outil.type, labo.dim, r, c);
+    M.poserPiece(labo.grille, labo.dim, labo.outil.type, ar, ac, labo.outil.variante ?? null);
   }
   rendreLabo();
 }
@@ -1066,9 +1197,9 @@ function rendreLabo() {
   const boutons = [];
   for (const type of M.ORDRE_FORMES) {
     for (const o of variantesDe(type)) {
-      const actif = labo.outil !== 'gomme' && labo.outil.type === type && (o === null || labo.outil.orientation === o);
+      const actif = labo.outil !== 'gomme' && labo.outil.type === type && (o === null || labo.outil.variante === o);
       boutons.push(`<button class="pal-btn ${actif ? 'actif' : ''}" type="button" data-type="${type}"
-        ${o ? `data-orientation="${o}"` : ''} aria-label="${libelleLong(type, o)}" title="${libelleLong(type, o)}">
+        ${o ? `data-variante="${o}"` : ''} aria-label="${libelleLong(type, o)}" title="${libelleLong(type, o)}">
         <span class="pal-glyphe">${svgForme(type, o)}</span>
         <span class="pal-reste">${M.FORMES[type].nom}</span></button>`);
     }
@@ -1080,12 +1211,11 @@ function rendreLabo() {
     b.addEventListener('click', () => {
       const type = b.dataset.type;
       if (type === 'gomme') labo.outil = 'gomme';
-      else labo.outil = M.FORMES[type].orientable
-        ? { type, orientation: b.dataset.orientation } : { type };
+      else labo.outil = { type, variante: b.dataset.variante ?? null };
       rendreLabo();
     });
   }
-  peindreFormes(labo.plateau.cases, labo.taille, labo.grille);
+  peindreFormes(labo.plateau.cases, labo.dim, labo.grille);
 }
 
 function effacerRayons() {
@@ -1101,7 +1231,7 @@ function effacerRayons() {
 
 function tirLabo(cote, index) {
   effacerRayons();
-  const res = M.tirer(labo.grille, labo.taille, cote, index);
+  const res = M.tirer(labo.grille, labo.dim, cote, index, labo.mode);
   labo.n++;
   labo.plateau.bords[cote][index].classList.add('surligne');
 
@@ -1134,9 +1264,20 @@ function tirLabo(cote, index) {
   }, res.etapes.length * 90 + 80));
 }
 
+for (const b of $$('#labo-etoile .seg')) {
+  b.addEventListener('click', () => {
+    labo.mode = b.dataset.mode;
+    for (const autre of $$('#labo-etoile .seg')) autre.classList.toggle('actif', autre === b);
+    effacerRayons();
+    rendreLabo();
+    $('#labo-resultat').innerHTML =
+      `Mode <strong>étoile ${labo.mode}</strong> : ${M.NOM_MODE_ETOILE[labo.mode]}. Clique une flèche pour tirer…`;
+  });
+}
+
 $('#labo-alea').addEventListener('click', () => {
   effacerRayons();
-  labo.grille = M.placementAleatoire(labo.taille, { triangle: 4, carre: 2, losange: 1, etoile: 1 });
+  labo.grille = M.placementAleatoire(labo.dim, { triangle: 3, carre: 1, losange: 1, etoile: 2 });
   rendreLabo();
 });
 $('#labo-vide').addEventListener('click', () => {

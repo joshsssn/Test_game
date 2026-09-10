@@ -1,10 +1,11 @@
 /* =========================================================================
    Lasers & Formes — moteur de jeu (pur, sans DOM, testable sous Node)
 
-   Toutes les pièces occupent un bloc de 2 × 2 cases. C'est ce qui rend le jeu
-   déchiffrable : chaque FACE d'une forme tombe sur une case bien identifiée,
-   donc le joueur sait toujours quelle face son laser a touchée, et peut en
-   déduire où il repart.
+   Le triangle, le carré et le losange occupent un bloc de 2 × 2 cases. C'est ce
+   qui rend le jeu déchiffrable : chaque FACE d'une forme tombe sur une case
+   bien identifiée, donc le joueur sait toujours quelle face son laser a
+   touchée, et peut en déduire où il repart. L'étoile ne dévie rien : elle n'a
+   aucune face à distinguer et tient sur une seule case.
    ========================================================================= */
 
 /* ───────────────────────── Géométrie de base ───────────────────────── */
@@ -35,6 +36,13 @@ export const DECALAGE = { NW: [0, 0], NE: [0, 1], SW: [1, 0], SE: [1, 1] };
 
 /** Bords de case adjacents à un coin. */
 export const BORDS_DU_COIN = { NW: ['N', 'W'], NE: ['N', 'E'], SE: ['S', 'E'], SW: ['S', 'W'] };
+
+/**
+ * Quart d'un bloc sur lequel il faut cliquer pour annoncer la pièce : toujours
+ * celui d'en bas à gauche. Une pièce d'une seule case (l'étoile) s'annonce
+ * évidemment sur sa case.
+ */
+export const QUART_DE_CALL = 'SW';
 
 /* ───────────────────────── Le triangle ─────────────────────────
    Un triangle rectangle inscrit dans le bloc. Son orientation est donnée par le
@@ -86,28 +94,73 @@ export function devierTriangle(coin, dir) {
         └─────┴─────┘                                                          */
 export const DIAGONALE_LOSANGE = { NW: '/', NE: '\\', SW: '\\', SE: '/' };
 
+/* ───────────────────────── L'étoile et ses trois modes ─────────────────────────
+   L'étoile ne dévie jamais le laser : elle n'agit que sur sa couleur. Son mode
+   est une RÈGLE DE LA PARTIE, choisie à la configuration et commune aux deux
+   joueurs — ce n'est donc pas quelque chose à deviner. Trois modes :
+
+     • simple    — sa teinte magenta s'ajoute au mélange, comme n'importe quelle
+                   autre forme ;
+     • dominante — elle efface tout ce que le laser avait accumulé et impose le
+                   magenta ; les formes rencontrées ENSUITE se mélangent
+                   normalement (bleu → magenta → rouge donne magenta + rouge,
+                   le bleu est perdu) ;
+     • blanche   — elle blanchit le laser et le verrouille : plus rien ne peut
+                   le colorer, quoi qu'il rencontre après.
+
+   Conséquence importante : la couleur n'est plus symétrique. Le trajet, lui,
+   reste réversible — tirer depuis la sortie d'un tir ramène toujours à son
+   entrée — mais la couleur obtenue peut différer selon le sens. C'est une
+   source d'information à part entière.                                        */
+export const MODES_ETOILE = ['simple', 'dominante', 'blanche'];
+
+/** Ce que chaque mode fait au laser, en clair. */
+export const NOM_MODE_ETOILE = {
+  simple:    'sa teinte magenta s\'ajoute au mélange',
+  dominante: 'efface les teintes précédentes et impose le magenta',
+  blanche:   'blanchit le laser et le verrouille définitivement'
+};
+
+/** Couleur sous laquelle chaque mode est dessiné. */
+export const COULEUR_MODE_ETOILE = { simple: 'magenta', dominante: 'magenta', blanche: 'blanc' };
+
 /* ───────────────────────── Les formes ───────────────────────── */
 
 /**
- * Les quatre formes du jeu.
- *  - triangle : bloc 2 × 2. Hypoténuse à 90°, cathètes à 180°. Quatre orientations. Bleu.
- *  - carre    : bloc 2 × 2. Demi-tour à 180° sur ses quatre faces. Rouge.
- *  - losange  : bloc 2 × 2. Rebond à 90° sur la face touchée. Jaune.
- *  - etoile   : une seule case. Elle ne dévie rien, donc aucune face à
- *               identifier : elle teinte le laser, et c'est tout. Magenta.
+ * Les quatre formes du jeu. `variantes` liste les déclinaisons qu'il faut
+ * annoncer correctement pour réussir un call : les quatre orientations du
+ * triangle, les trois modes de l'étoile.
  */
 export const FORMES = {
-  triangle: { nom: 'Triangle', couleur: 'bleu',    orientable: true, bloc: true,
-              glyphes: { NW: '◤', NE: '◥', SE: '◢', SW: '◣' } },
-  carre:    { nom: 'Carré',    couleur: 'rouge',   orientable: false, bloc: true,  glyphe: '■' },
-  losange:  { nom: 'Losange',  couleur: 'jaune',   orientable: false, bloc: true,  glyphe: '◆' },
-  etoile:   { nom: 'Étoile',   couleur: 'magenta', orientable: false, bloc: false, glyphe: '★' }
+  triangle: {
+    nom: 'Triangle', couleur: 'bleu', bloc: true,
+    variantes: COINS,
+    nomsVariantes: { NW: 'Triangle ◤', NE: 'Triangle ◥', SE: 'Triangle ◢', SW: 'Triangle ◣' },
+    detailsVariantes: NOM_COIN
+  },
+  carre:   { nom: 'Carré',   couleur: 'rouge',   bloc: true,  variantes: null, glyphe: '■' },
+  losange: { nom: 'Losange', couleur: 'jaune',   bloc: true,  variantes: null, glyphe: '◆' },
+  etoile:  { nom: 'Étoile',  couleur: 'magenta', bloc: false, variantes: null, glyphe: '★' }
 };
+
+/** Mode d'étoile appliqué par défaut. */
+export const MODE_ETOILE_DEFAUT = 'simple';
 
 export const ORDRE_FORMES = ['triangle', 'carre', 'losange', 'etoile'];
 
 /** Côté, en cases, d'une pièce en bloc. */
 export const COTE_BLOC = 2;
+
+/** Déclinaisons d'un type : ses variantes, ou [null] s'il n'en a pas. */
+export const variantesDe = (type) => FORMES[type].variantes ?? [null];
+
+/**
+ * Couleur d'affichage d'une forme. L'étoile prend celle de son mode, qui est
+ * une règle de la partie : les deux joueurs la connaissent.
+ */
+export function couleurDe(type, modeEtoile = MODE_ETOILE_DEFAUT) {
+  return type === 'etoile' ? COULEUR_MODE_ETOILE[modeEtoile] : FORMES[type].couleur;
+}
 
 /* ───────────────────────── Couleurs ───────────────────────── */
 
@@ -154,7 +207,10 @@ export const CSS_COULEURS = {
   noir:      '#0b1120'
 };
 
-const LETTRES = 'ABCDEFGHIJKLMNOP';
+const LETTRES = 'ABCDEFGHIJKLMNOPQRSTUVWXYZ';
+
+/** Nombre maximum de colonnes nommables (A à Z). */
+export const MAX_COLONNES = LETTRES.length;
 
 /** Clé de grille pour une case. */
 export const cle = (r, c) => r + ',' + c;
@@ -175,31 +231,54 @@ export function melanger(ensemble) {
  * traverse sans être dévié ni teinté.
  */
 export const caseInerte = (cellule) =>
-  cellule.type === 'triangle' && cellule.part === COIN_OPPOSE[cellule.orientation];
+  cellule.type === 'triangle' && cellule.part === COIN_OPPOSE[cellule.variante];
 
 /** Nouvelle direction du laser après avoir rencontré une case occupée. */
 export function nouvelleDirection(cellule, dir) {
   if (caseInerte(cellule)) return dir;
   switch (cellule.type) {
-    case 'carre':   return OPPOSE[dir];                                        // mur sur les 4 faces
-    case 'etoile':  return dir;                                                // traverse tout droit
-    case 'losange': return MIROIRS[DIAGONALE_LOSANGE[cellule.part]][dir];      // rebond 90°
+    case 'carre':   return OPPOSE[dir];                                    // mur sur les 4 faces
+    case 'etoile':  return dir;                                            // traverse tout droit
+    case 'losange': return MIROIRS[DIAGONALE_LOSANGE[cellule.part]][dir];  // rebond 90°
     case 'triangle':
-      if (cellule.part === cellule.orientation) return OPPOSE[dir];            // coin plein : deux cathètes
-      return devierTriangle(cellule.orientation, dir);
+      if (cellule.part === cellule.variante) return OPPOSE[dir];           // coin plein : deux cathètes
+      return devierTriangle(cellule.variante, dir);
     default: return dir;
+  }
+}
+
+/**
+ * Applique à l'état de couleur du laser l'effet d'une case occupée.
+ * @param {{teintes: Set<string>, verrouille: boolean}} etat  modifié sur place
+ * @param {object} cellule
+ * @param {'simple'|'dominante'|'blanche'} modeEtoile  règle de la partie
+ */
+export function appliquerTeinte(etat, cellule, modeEtoile = MODE_ETOILE_DEFAUT) {
+  if (caseInerte(cellule) || etat.verrouille) return;
+  if (cellule.type !== 'etoile') { etat.teintes.add(FORMES[cellule.type].couleur); return; }
+  switch (modeEtoile) {
+    case 'dominante': etat.teintes.clear(); etat.teintes.add('magenta'); break;
+    case 'blanche':   etat.teintes.clear(); etat.verrouille = true;      break;
+    default:          etat.teintes.add('magenta');                       break;   // 'simple'
   }
 }
 
 /* ───────────────────────── Propagation ───────────────────────── */
 
+/** Dimensions d'une grille. */
+export const dim = (lignes, colonnes = lignes) => ({ lignes, colonnes });
+
+/** Nombre de bords tirables d'un côté donné. */
+export const bordsDuCote = (d, cote) =>
+  (cote === 'gauche' || cote === 'droite') ? d.lignes : d.colonnes;
+
 /** Point de départ d'un tir : case fictive hors grille + direction d'entrée. */
-export function depart(taille, cote, index) {
+export function depart(d, cote, index) {
   switch (cote) {
-    case 'gauche': return { pos: [index - 1, -1],     dir: 'E' };
-    case 'droite': return { pos: [index - 1, taille], dir: 'W' };
-    case 'haut':   return { pos: [-1, index - 1],     dir: 'S' };
-    case 'bas':    return { pos: [taille, index - 1], dir: 'N' };
+    case 'gauche': return { pos: [index - 1, -1],         dir: 'E' };
+    case 'droite': return { pos: [index - 1, d.colonnes], dir: 'W' };
+    case 'haut':   return { pos: [-1, index - 1],         dir: 'S' };
+    case 'bas':    return { pos: [d.lignes, index - 1],   dir: 'N' };
     default: throw new Error('Côté inconnu : ' + cote);
   }
 }
@@ -207,23 +286,25 @@ export function depart(taille, cote, index) {
 /**
  * Propage un laser dans la grille.
  * @param {Map<string,object>} grille  case -> quart de pièce
- * @param {number} taille  côté de la grille
+ * @param {{lignes:number, colonnes:number}} d  dimensions de la grille
  * @param {'gauche'|'droite'|'haut'|'bas'} cote  bord d'entrée
- * @param {number} index   numéro du bord d'entrée, de 1 à `taille`
+ * @param {number} index   numéro du bord d'entrée, à partir de 1
+ * @param {'simple'|'dominante'|'blanche'} modeEtoile  mode d'étoile de la partie
  * @returns {{statut:'sorti'|'piege', coteSortie?:string, indexSortie?:number,
  *            retour?:boolean, couleur:string|null, etapes:Array}}
  *
- * Note : chaque case applique une permutation des directions et le déplacement
- * en découle, donc (case, direction) -> (case, direction) est une bijection.
- * Aucun cycle n'est atteignable depuis un bord : le statut 'piege' est un
- * garde-fou qui ne devrait jamais se déclencher (vérifié par fuzzing dans
- * tests/moteur.test.mjs).
+ * Chaque case applique une permutation des directions et le déplacement en
+ * découle, donc (case, direction) -> (case, direction) est une bijection :
+ * aucun cycle n'est atteignable depuis un bord, et le TRAJET est réversible.
+ * La COULEUR, elle, ne l'est plus quand la partie se joue en mode d'étoile
+ * dominante ou blanche : l'ordre des rencontres compte. Le statut 'piege' est
+ * un garde-fou qui ne devrait jamais se déclencher.
  */
-export function tirer(grille, taille, cote, index) {
-  const d = depart(taille, cote, index);
-  let [r, c] = d.pos;
-  let dir = d.dir;
-  const teintes = new Set();
+export function tirer(grille, d, cote, index, modeEtoile = MODE_ETOILE_DEFAUT) {
+  const dep = depart(d, cote, index);
+  let [r, c] = dep.pos;
+  let dir = dep.dir;
+  const etat = { teintes: new Set(), verrouille: false };
   const vus = new Set();
   const etapes = [];
 
@@ -231,7 +312,7 @@ export function tirer(grille, taille, cote, index) {
     r += DIRS[dir][0];
     c += DIRS[dir][1];
 
-    if (r < 0 || r >= taille || c < 0 || c >= taille) {
+    if (r < 0 || r >= d.lignes || c < 0 || c >= d.colonnes) {
       const coteSortie = COTE_SORTIE[dir];
       const indexSortie = (coteSortie === 'gauche' || coteSortie === 'droite') ? r + 1 : c + 1;
       return {
@@ -239,7 +320,7 @@ export function tirer(grille, taille, cote, index) {
         coteSortie,
         indexSortie,
         retour: coteSortie === cote && indexSortie === index,
-        couleur: melanger(teintes),
+        couleur: melanger(etat.teintes),
         etapes
       };
     }
@@ -249,28 +330,38 @@ export function tirer(grille, taille, cote, index) {
     vus.add(signature);
 
     const cellule = grille.get(cle(r, c));
-    const agit = cellule && !caseInerte(cellule);
-    if (agit) teintes.add(FORMES[cellule.type].couleur);
-    etapes.push({ r, c, dir, couleur: melanger(teintes) });
-    if (agit) dir = nouvelleDirection(cellule, dir);
+    if (cellule) appliquerTeinte(etat, cellule, modeEtoile);
+    etapes.push({ r, c, dir, couleur: melanger(etat.teintes) });
+    if (cellule) dir = nouvelleDirection(cellule, dir);
   }
 }
 
 /* ───────────────────────── Pièces et placement ───────────────────────── */
 
-/** Deux formes sont identiques si même type et, pour un triangle, même orientation. */
+/** Deux formes sont identiques si même type et, le cas échéant, même variante. */
 export function memeForme(a, b) {
   if (!a || !b || a.type !== b.type) return false;
-  if (FORMES[a.type].orientable) return a.orientation === b.orientation;
-  return true;
+  return FORMES[a.type].variantes ? a.variante === b.variante : true;
 }
 
-/** Nom complet d'une forme, orientation comprise. */
+/** Nom complet d'une forme, variante comprise. */
 export function nomForme(f) {
   if (!f) return 'case vide';
   const def = FORMES[f.type];
-  return def.orientable ? `${def.nom} ${def.glyphes[f.orientation]}` : def.nom;
+  return def.variantes ? (def.nomsVariantes[f.variante] ?? def.nom) : def.nom;
 }
+
+/** Précision en clair sur la variante (orientation du triangle, mode de l'étoile). */
+export function detailVariante(type, variante) {
+  const def = FORMES[type];
+  return def.variantes && variante ? def.detailsVariantes[variante] : '';
+}
+
+/**
+ * Vrai si cette case est celle sur laquelle il faut cliquer pour annoncer la
+ * pièce : le quart en bas à gauche d'un bloc, ou la case unique de l'étoile.
+ */
+export const estCaseDeCall = (cellule) => !cellule.part || cellule.part === QUART_DE_CALL;
 
 /** Côté occupé par une forme : 2 pour les blocs, 1 pour l'étoile. */
 export const coteDe = (type) => (FORMES[type].bloc ? COTE_BLOC : 1);
@@ -295,29 +386,29 @@ export function empriseDe(type, r, c) {
 }
 
 /** Ancre valide la plus proche : une pièce posée au bord se recale dans la grille. */
-export function ancreValide(type, taille, r, c) {
-  const max = taille - coteDe(type);
-  return [Math.max(0, Math.min(max, r)), Math.max(0, Math.min(max, c))];
+export function ancreValide(type, d, r, c) {
+  const n = coteDe(type);
+  return [Math.max(0, Math.min(d.lignes - n, r)), Math.max(0, Math.min(d.colonnes - n, c))];
 }
 
 /** La pièce tient-elle ici sans déborder ni chevaucher une autre ? */
-export function placeLibre(grille, taille, type, r, c) {
+export function placeLibre(grille, d, type, r, c) {
   return empriseDe(type, r, c).every(
-    (u) => u.r >= 0 && u.r < taille && u.c >= 0 && u.c < taille && !grille.has(cle(u.r, u.c)));
+    (u) => u.r >= 0 && u.r < d.lignes && u.c >= 0 && u.c < d.colonnes && !grille.has(cle(u.r, u.c)));
 }
 
 /**
- * Pose une pièce. Ses quatre cases partagent le même identifiant, ce qui permet
- * de la retirer ou de la révéler d'un bloc.
+ * Pose une pièce. Ses cases partagent le même identifiant, ce qui permet de la
+ * retirer ou de la révéler d'un bloc.
  * @returns {boolean} vrai si la pièce a pu être posée
  */
-export function poserPiece(grille, taille, type, r, c, orientation = null) {
-  if (!placeLibre(grille, taille, type, r, c)) return false;
+export function poserPiece(grille, d, type, r, c, variante = null) {
+  if (!placeLibre(grille, d, type, r, c)) return false;
   const id = `${type}@${r},${c}`;
   for (const u of empriseDe(type, r, c)) {
     const cellule = { id, type, ancre: [r, c] };
     if (u.part) cellule.part = u.part;
-    if (FORMES[type].orientable) cellule.orientation = orientation ?? COINS[0];
+    if (FORMES[type].variantes) cellule.variante = variante ?? FORMES[type].variantes[0];
     grille.set(cle(u.r, u.c), cellule);
   }
   return true;
@@ -331,19 +422,21 @@ export function retirerPiece(grille, r, c) {
   return true;
 }
 
-/** Change l'orientation du triangle qui occupe une case (ses quatre quarts). */
-export function orienterTriangle(grille, r, c, coin) {
+/** Change la variante de la pièce qui occupe une case (toutes ses cases). */
+export function changerVariante(grille, r, c, variante) {
   const cellule = grille.get(cle(r, c));
-  if (!cellule || cellule.type !== 'triangle') return null;
-  for (const v of grille.values()) if (v.id === cellule.id) v.orientation = coin;
-  return coin;
+  if (!cellule || !FORMES[cellule.type].variantes) return null;
+  for (const v of grille.values()) if (v.id === cellule.id) v.variante = variante;
+  return variante;
 }
 
-/** Fait pivoter d'un quart de tour le triangle qui occupe une case. */
-export function pivoterTriangle(grille, r, c) {
+/** Passe à la variante suivante de la pièce qui occupe une case. */
+export function varianteSuivante(grille, r, c) {
   const cellule = grille.get(cle(r, c));
-  if (!cellule || cellule.type !== 'triangle') return null;
-  return orienterTriangle(grille, r, c, COINS[(COINS.indexOf(cellule.orientation) + 1) % COINS.length]);
+  if (!cellule) return null;
+  const liste = FORMES[cellule.type].variantes;
+  if (!liste) return null;
+  return changerVariante(grille, r, c, liste[(liste.indexOf(cellule.variante) + 1) % liste.length]);
 }
 
 /** Clés des cases occupées par la pièce dont on connaît une case. */
@@ -371,21 +464,22 @@ export function inventairePose(grille) {
 const alea = (n) => Math.floor(Math.random() * n);
 
 /** Génère un placement aléatoire respectant l'inventaire demandé. */
-export function placementAleatoire(taille, counts) {
+export function placementAleatoire(d, counts) {
   const grille = new Map();
   const ancres = [];
-  for (let r = 0; r < taille; r++) for (let c = 0; c < taille; c++) ancres.push([r, c]);
+  for (let r = 0; r < d.lignes; r++) for (let c = 0; c < d.colonnes; c++) ancres.push([r, c]);
 
   // Les blocs d'abord : ils trouvent bien plus difficilement leur place que l'étoile.
   const types = [...ORDRE_FORMES].sort((a, b) => emprise(b) - emprise(a));
   for (const type of types) {
+    const liste = variantesDe(type);
     for (let n = 0; n < (counts[type] || 0); n++) {
       for (let i = ancres.length - 1; i > 0; i--) {              // mélange de Fisher-Yates
         const j = alea(i + 1);
         [ancres[i], ancres[j]] = [ancres[j], ancres[i]];
       }
-      const orientation = FORMES[type].orientable ? COINS[alea(COINS.length)] : null;
-      ancres.some(([r, c]) => poserPiece(grille, taille, type, r, c, orientation));
+      const variante = liste[alea(liste.length)];
+      ancres.some(([r, c]) => poserPiece(grille, d, type, r, c, variante));
     }
   }
   return grille;
